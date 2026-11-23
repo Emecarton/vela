@@ -48,7 +48,7 @@ function momentum(x, n) {
 // drift: how far a weight may wander before the bot resizes it. stop: safety stop vs. average buy price.
 export const BOTS = [
   {
-    id: 'calm', icon: '🐢', hue: 215, risk: 2, every: 7, drift: 0.1,
+    id: 'calm', icon: '🐢', hue: 215, risk: 2, every: 7, drift: 0.1, coins: ['BTC', 'ETH'],
     target(x) {
       const w = {}, why = {};
       for (const [c, wt] of [['BTC', 0.6], ['ETH', 0.4]])
@@ -57,7 +57,7 @@ export const BOTS = [
     },
   },
   {
-    id: 'steps', icon: '🪜', hue: 265, risk: 3, every: 7, drift: 0.05, up: 'step_up', down: 'step_down',
+    id: 'steps', icon: '🪜', hue: 265, risk: 3, every: 7, drift: 0.05, up: 'step_up', down: 'step_down', coins: ['BTC', 'ETH'],
     target(x) {
       const w = {}, why = {};
       for (const [c, wt] of [['BTC', 0.6], ['ETH', 0.4]]) {
@@ -70,7 +70,7 @@ export const BOTS = [
     },
   },
   {
-    id: 'longterm', icon: '🌳', hue: 150, risk: 4, every: 30, drift: 0.05, up: 'rebalance', down: 'rebalance',
+    id: 'longterm', icon: '🌳', hue: 150, risk: 4, every: 30, drift: 0.05, up: 'rebalance', down: 'rebalance', coins: ['BTC', 'ETH'],
     target(x) {
       const w = {}, why = {};
       const mix = x.has('ETH') ? [['BTC', 0.7], ['ETH', 0.3]] : [['BTC', 1]];
@@ -78,8 +78,8 @@ export const BOTS = [
       return { w, why, out: 'rebalance' };
     },
   },
-  { id: 'momentum', icon: '🚀', hue: 28, risk: 4, every: 7, hold: true, stop: -0.25, flagship: true, target: x => momentum(x, 3) },
-  { id: 'aggressive', icon: '🔥', hue: 355, risk: 5, every: 7, hold: true, stop: -0.20, target: x => momentum(x, 2) },
+  { id: 'momentum', icon: '🚀', hue: 28, risk: 4, every: 7, hold: true, stop: -0.25, flagship: true, pick: 3, coins: UNIVERSE, target: x => momentum(x, 3) },
+  { id: 'aggressive', icon: '🔥', hue: 355, risk: 5, every: 7, hold: true, stop: -0.20, pick: 2, coins: UNIVERSE, target: x => momentum(x, 2) },
 ];
 export const botById = id => BOTS.find(b => b.id === id);
 
@@ -88,7 +88,7 @@ export function simulate(bot, d, { start = 0, end = d.dates.length - 1, cash = 1
   const pos = {}, trades = [], eq = [];
   const px = (c, i) => d.px[c][i];
   const value = i => { let v = cash; for (const c in pos) v += pos[c].q * px(c, i); return v; };
-  const log = (i, c, side, usd, p, why) => trades.push({ day: d.dates[i], c, side, usd, p, why });
+  const log = (i, c, side, usd, p, why, q) => trades.push({ day: d.dates[i], c, side, usd, p, why, q });
 
   const buy = (c, usd, i, why) => {
     usd = Math.min(usd, cash);
@@ -97,7 +97,7 @@ export function simulate(bot, d, { start = 0, end = d.dates.length - 1, cash = 1
     if (o) { o.entry = (o.entry * o.q + p * q) / (o.q + q); o.q += q; }
     else pos[c] = { q, entry: p };
     cash -= usd;
-    log(i, c, 'buy', usd, p, why);
+    log(i, c, 'buy', usd, p, why, q);
   };
   const sell = (c, q, i, why) => {
     const o = pos[c], p = px(c, i);
@@ -106,7 +106,7 @@ export function simulate(bot, d, { start = 0, end = d.dates.length - 1, cash = 1
     const usd = q * p * (1 - FEE);
     cash += usd; o.q -= q;
     if (o.q <= 0) delete pos[c];
-    log(i, c, 'sell', usd, p, why);
+    log(i, c, 'sell', usd, p, why, q);
   };
 
   for (let i = start; i <= end; i++) {
@@ -178,10 +178,46 @@ export function runWallet(w, d, live = {}) {
   for (const c in r.pos) {
     const p = live[c] ?? d.px[c][last], v = r.pos[c].q * p;
     value += v;
-    holdings.push({ c, value: v, gain: p / r.pos[c].entry - 1 });
+    holdings.push({ c, value: v, gain: p / r.pos[c].entry - 1, entry: r.pos[c].entry, now: p });
   }
   holdings.sort((a, b) => b.value - a.value);
   const k = Math.floor((last - start) / bot.every) + 1;
   const nextDay = d.dates[start] + k * bot.every;
   return { bot, pending: false, value, cash: r.cash, holdings, trades: r.trades, eq: [...r.eq, value], nextAt: (nextDay + 1) * DAY, start };
+}
+
+// What the bot "sees" at a given close: market trend, every coin it watches and what it would pick.
+// Drives the live agents panel. Same rules as target(), just laid out for people.
+export function explain(bot, d, i = d.dates.length - 1) {
+  const x = ctxAt(d, i), t = bot.target(x);
+  const btcUp = x.has('BTC', 200) ? x.p('BTC') > x.sma('BTC', 200) : null;
+  const coins = bot.coins.filter(c => x.has(c)).map(c => {
+    const long = x.has(c, 200);
+    const signals = long ? [x.p(c) > x.sma(c, 50), x.p(c) > x.sma(c, 200), x.sma(c, 50) > x.sma(c, 200)] : [];
+    const trend = bot.pick ? long && x.p(c) > x.sma(c, 200) && x.sma(c, 20) > x.sma(c, 50) : long && x.p(c) > x.sma(c, 200);
+    return {
+      c, p: x.p(c), trend, score: signals.filter(Boolean).length,
+      ret30: x.has(c, 31) ? x.ret(c, 30) : null, ret1: x.has(c, 2) ? x.ret(c, 1) : null,
+      avg200: long ? x.sma(c, 200) : null, w: t.w[c] || 0,
+    };
+  });
+  coins.sort((a, b) => (b.w - a.w) || ((b.trend - a.trend)) || ((b.ret30 ?? -9) - (a.ret30 ?? -9)));
+  return { day: d.dates[i], btcUp, btc: x.p('BTC'), btcAvg: x.has('BTC', 200) ? x.sma('BTC', 200) : null, coins, target: t.w, out: t.out };
+}
+
+// Closed results from a trade list: wins, losses, best and last sell (each sell vs. its average cost).
+export function tradeStats(trades) {
+  const book = {}, sells = [], rows = [];
+  for (const t of trades) {
+    const b = book[t.c] || (book[t.c] = { q: 0, cost: 0 });
+    if (t.side === 'buy') { b.q += t.q; b.cost += t.usd; rows.push(t); }
+    else {
+      const share = b.q ? Math.min(1, t.q / b.q) : 1, cost = b.cost * share;
+      const s = { ...t, pnl: t.usd - cost, pct: cost ? t.usd / cost - 1 : 0 };
+      sells.push(s); rows.push(s);
+      b.q -= t.q; b.cost -= cost; if (b.q <= 1e-12) { b.q = 0; b.cost = 0; }
+    }
+  }
+  const wins = sells.filter(s => s.pnl > 0).length;
+  return { rows, sells, wins, losses: sells.length - wins, best: sells.reduce((m, s) => (!m || s.pct > m.pct ? s : m), null), last: sells[sells.length - 1] || null };
 }

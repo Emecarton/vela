@@ -1,5 +1,5 @@
 // app.js — the screens. No frameworks: plain HTML strings, one render() for everything.
-import { BOTS, botById, simulate, holdBTC, stats, yearly, runWallet, DAY } from './engine.js';
+import { BOTS, botById, simulate, holdBTC, stats, yearly, runWallet, explain, tradeStats, DAY } from './engine.js';
 import { loadMarket } from './data.js';
 import { STR } from './i18n.js';
 
@@ -13,7 +13,7 @@ const store = {
 
 const S = {
   tab: 'practice', view: null,
-  set: { lang: (navigator.language || 'es').startsWith('es') ? 'es' : 'en', theme: 'auto', size: 1, onboarded: false, ...store.get('settings', {}) },
+  set: { lang: (navigator.language || 'es').startsWith('es') ? 'es' : 'en', theme: 'terminal', size: 1, onboarded: false, ...store.get('settings', {}) },
   wallets: store.get('wallets', []),
   mk: null, loading: false, error: null,
   test: { bot: 'momentum', period: 1095 },
@@ -117,28 +117,114 @@ function practice() {
 }
 
 function walletDetail(id) {
-  const t = T(), w = S.wallets.find(x => x.id === id);
+  const t = T(), tt = t.term, w = S.wallets.find(x => x.id === id);
   if (!w) { S.view = null; return practice(); }
   if (!S.mk) return statusBox();
-  const v = walletView(w), b = v.bot;
-  const trades = [...v.trades].reverse().slice(0, 60);
-  return `<button class="back" data-act="back" data-k="back"><span aria-hidden="true">‹</span> ${t.back}</button>
-    <section class="card hero">
-      <div class="row">${avatar(b, true)}<div><h2>${botName(b)}</h2><p class="muted">${t.started} ${dayDate(w.startDay)} · ${money(w.cash)}</p></div></div>
-      <p class="big">${money(v.value)}</p>
-      <p>${chg(v.value / w.cash - 1)} <span class="muted">${t.sinceStart}</span></p>
-      ${v.eq.length > 2 ? chart([{ v: v.eq, cls: 'main' }], `${botName(b)}: ${money(w.cash)} → ${money(v.value)}`) : ''}
-      <p class="muted">${v.pending ? t.waiting : t.nextCheck}: <b>${when(v.nextAt)}</b></p>
-    </section>
-    <section class="card"><h3>${t.holdings}</h3><ul class="rows">
-      ${(v.holdings || []).map(h => `<li><span><b>${h.c}</b> <span class="muted">${COIN[h.c] || ''}</span></span><span class="r">${money(h.value)}<br>${chg(h.gain)}</span></li>`).join('')}
-      <li><span><b>${t.cash}</b></span><span class="r">${money(v.cash)}</span></li></ul></section>
-    <section class="card"><h3>${t.history}</h3>
-      ${trades.length ? `<ul class="rows trades">${trades.map(x => `<li><span><b>${x.side === 'buy' ? t.bought : t.sold} ${x.c}</b><br><span class="muted">${t.why[x.why] || ''}</span></span>
-        <span class="r">${money(x.usd)}<br><span class="muted">${dayDate(x.day, { day: 'numeric', month: 'short' })}</span></span></li>`).join('')}</ul>` : `<p class="muted">${t.noTrades}</p>`}
-    </section>
-    <button class="btn danger wide" data-act="remove" data-v="${w.id}" data-k="remove">${t.stopBot}</button>`;
+  const v = walletView(w), b = v.bot, d = S.mk.d;
+  const e = cached(`e|${b.id}|${S.mk.at}`, () => explain(b, d));
+  const ts = tradeStats(v.trades);
+  const picks = e.coins.filter(c => c.w > 0), nBlocked = e.coins.filter(c => !c.trend).length;
+  const blockedAll = b.pick && !e.btcUp;
+  const startDay = v.start != null ? d.dates[v.start] : w.startDay;
+  const dm = day => dayDate(day, { day: '2-digit', month: '2-digit' });
+  const ag = agents(b, e, v);
+
+  const head = `<header class="panel t-head">
+      <div class="t-top">${avatar(b)}<div class="t-id"><p class="t-name">VELA <span class="hl">TERMINAL</span> <span class="ver">· ${esc(botName(b))}</span></p>
+        <p class="run mono"><i class="dot${v.pending ? ' wait' : ''}" aria-hidden="true"></i>${v.pending ? tt.waitingFirst : tt.running} · ${tt.nextIn} <b data-until="${v.nextAt}">${countdown(v.nextAt)}</b></p></div>
+        <span class="paper mono">${tt.paper}</span></div>
+      <div class="t-nums"><div><p class="lbl mono">${tt.balance}</p><p class="t-big mono">${money(v.value)}</p><p>${chg(v.value / w.cash - 1)}</p></div>
+        <div class="t-wl mono"><p><b>${v.trades.length}</b> ${tt.trades}</p><p><b class="up-t">${ts.wins}</b> / <b class="down-t">${ts.losses}</b></p></div></div>
+    </header>`;
+
+  const tok = [...picks, ...e.coins.filter(c => !c.w)].slice(0, 4);
+  const tx = k => 12 + k * (316 / Math.max(1, tok.length)) + (316 / Math.max(1, tok.length) - 74) / 2;
+  const flow = `<section class="panel flow" aria-label="${tt.flow}">
+      <h3 class="t-h mono">${tt.flow}</h3>
+      <svg viewBox="0 0 340 214" class="flow-svg" role="img" aria-label="${esc(`${tt.checked.replace('{n}', e.coins.length)}. ${tt.blockedNode}: ${blockedAll ? e.coins.length : nBlocked}. ${tt.pickNode}: ${picks.map(p => p.c).join(', ') || '—'}`)}">
+        <defs><radialGradient id="g-core"><stop offset="0" stop-color="var(--accent)" stop-opacity=".35"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></radialGradient></defs>
+        ${tok.map((c, k) => { const cls = c.w ? 'pick' : c.trend && !blockedAll ? 'ok' : 'out', x = tx(k);
+          return `<path class="wire ${cls}" d="M${x + 37} 46 C${x + 37} 90 170 80 170 104"/>
+          <g class="tok ${cls}"><rect x="${x}" y="6" width="74" height="40" rx="9"/><text x="${x + 37}" y="23" text-anchor="middle" class="t1">$${c.c}</text>
+          <text x="${x + 37}" y="38" text-anchor="middle" class="t2">${c.ret30 == null ? '—' : pctTxt(c.ret30)}</text></g>`; }).join('')}
+        <path class="wire out" d="M136 142 L74 142"/><path class="wire pick" d="M204 142 L266 142"/>
+        <circle cx="170" cy="142" r="62" fill="url(#g-core)" class="halo"/>
+        <circle cx="170" cy="142" r="34" class="core"/><text x="170" y="152" text-anchor="middle" class="core-i">⛵</text>
+        <text x="170" y="196" text-anchor="middle" class="lbl-s">${tt.core}</text><text x="170" y="209" text-anchor="middle" class="lbl-xs">${tt.checked.replace('{n}', e.coins.length)}</text>
+        <g class="node out"><circle cx="48" cy="142" r="24"/><path d="M48 130 L60 151 L36 151 Z" class="tri"/><text x="48" y="186" text-anchor="middle" class="lbl-s">${tt.blockedNode}</text><text x="48" y="199" text-anchor="middle" class="lbl-xs">${blockedAll ? e.coins.length : nBlocked}</text></g>
+        <g class="node pick"><circle cx="292" cy="142" r="24"/><circle cx="292" cy="142" r="13" class="ring"/><circle cx="292" cy="142" r="4" class="ring-dot"/>
+          <text x="292" y="186" text-anchor="middle" class="lbl-s">${picks.length ? tt.pickNode : tt.cashNode}</text><text x="292" y="199" text-anchor="middle" class="lbl-xs">${picks.map(p => p.c).join(' ') || '$'}</text></g>
+      </svg>
+      <ul class="coins mono" aria-label="${t.ag.radar}">${e.coins.map(c => `<li class="${c.w ? 'pick' : c.trend && !blockedAll ? 'ok' : 'out'}"><b>${c.c}</b> ${c.ret30 == null ? '' : pctTxt(c.ret30)}</li>`).join('')}</ul>
+    </section>`;
+
+  const stat = (label, val, sub, cls = '') => `<div class="panel tstat"><p class="lbl mono">${label}</p><p class="tv mono ${cls}">${val}</p><p class="lbl-xs mono">${sub}</p></div>`;
+  const stats4 = `<section class="tstats">
+      ${stat(tt.blocked, blockedAll ? e.coins.length : nBlocked, tt.blockedSub.replace('{n}', e.coins.length), 'down-t')}
+      ${stat(tt.best, ts.best ? pctTxt(ts.best.pct) : '—', ts.best ? '$' + ts.best.c : '', ts.best && ts.best.pct >= 0 ? 'up-t' : 'down-t')}
+      ${stat(tt.winRate, ts.sells.length ? Math.round(ts.wins / ts.sells.length * 100) + '%' : '—', `${ts.wins}W / ${ts.losses}L`)}
+      ${stat(tt.lastSell, ts.last ? (ts.last.pnl >= 0 ? '+' : '−') + money(Math.abs(ts.last.pnl)) : '—', ts.last ? '$' + ts.last.c : '', ts.last ? (ts.last.pnl >= 0 ? 'up-t' : 'down-t') : '')}
+    </section>`;
+
+  const agentsBox = `<section class="panel"><h3 class="t-h mono">${tt.agents} <span class="muted">· ${tt.agentsN.replace('{n}', ag.length)}</span></h3>
+      <ul class="agents">${ag.map(a => `<li class="agent k-${a.k}${a.you ? ' you' : ''}"><span class="ai" aria-hidden="true">${a.ic}</span>
+        <span class="an"><b class="mono">${a.name}</b><span class="mono">${esc(a.sub)}</span></span><span class="tag mono">${a.tag}</span></li>`).join('')}</ul></section>`;
+
+  const lastWhy = c => [...v.trades].reverse().find(x => x.c === c && x.side === 'buy')?.why;
+  const pos = `<section class="panel"><h3 class="t-h mono">${tt.position}</h3>${(v.holdings || []).length ? (v.holdings || []).map(h => `<div class="pos">
+      <div class="pos-h"><b class="mono">$${h.c}</b> <span class="muted">${COIN[h.c] || ''}</span> <span class="tag mono k-green">${tt.open}</span><span class="pos-g">${chg(h.gain)}</span></div>
+      <dl class="pos-g4 mono"><div><dt>${tt.entry}</dt><dd>${money(h.entry)}</dd></div><div><dt>${tt.now}</dt><dd>${money(h.now)}</dd></div><div><dt>${tt.size}</dt><dd>${money(h.value)}</dd></div></dl>
+      <p class="lbl-xs mono">${tt.reason}: ${t.why[lastWhy(h.c)] || '—'}</p></div>`).join('')
+    : `<p class="mono cashwhy">${tt.cashWhy} <b>${v.pending ? t.waiting + ' ' + when(v.nextAt) : t.why[e.out] || '—'}</b></p>`}
+      <p class="lbl-xs mono">${t.cash}: ${money(v.cash)}</p></section>`;
+
+  const eq = v.eq.length > 2 ? `<section class="panel"><h3 class="t-h mono">${tt.equity}</h3>
+      ${chart([{ v: v.eq, cls: 'main' }], `${money(w.cash)} → ${money(v.value)}`, 120)}
+      <div class="eq-row mono"><span>${tt.start} ${dayDate(startDay, { day: 'numeric', month: 'short' })}<br><b>${money(w.cash)}</b></span><span class="r">${tt.now}<br><b>${money(v.value)}</b></span></div></section>` : '';
+
+  const rows = [...ts.rows].reverse().slice(0, 40);
+  const log = `<section class="panel log"><h3 class="t-h mono"><span class="hl">$</span> ${tt.log} <span class="muted">· ${tt.lines.replace('{n}', v.trades.length)}</span></h3>
+      ${rows.length ? `<ul class="mono">${rows.map(x => { const kind = x.why === 'stop' ? 'stop' : x.side;
+        return `<li><span class="ts">${dm(x.day)}</span><span class="side ${kind}">${tt[kind]}</span><b>$${x.c}</b><span class="amt ${x.pnl == null ? '' : x.pnl >= 0 ? 'up-t' : 'down-t'}">${x.pnl == null ? money(x.usd) : (x.pnl >= 0 ? '+' : '−') + money(Math.abs(x.pnl))}</span>
+        <span class="rs">${t.why[x.why] || ''}</span></li>`; }).join('')}</ul>` : `<p class="mono muted">${tt.emptyLog}</p>`}</section>`;
+
+  return `<div class="term"><button class="back" data-act="back" data-k="back"><span aria-hidden="true">‹</span> ${t.back}</button>
+    ${head}${flow}${stats4}${agentsBox}${pos}${eq}${log}
+    <button class="btn danger wide" data-act="remove" data-v="${w.id}" data-k="remove">${t.stopBot}</button></div>`;
 }
+
+function agents(b, e, v) {
+  const a = T().ag, A = [], nTrend = e.coins.filter(c => c.trend).length;
+  A.push({ ic: '📡', name: a.radar, sub: fill(a.radarSub, { n: e.coins.length, d: dayDate(e.day, { day: 'numeric', month: 'short' }) }), tag: 'SCAN', k: 'cyan' });
+  if (b.pick) {
+    const picks = e.coins.filter(c => c.w > 0);
+    A.push({ ic: '🧭', name: a.btc, sub: `BTC ${money(e.btc)} · ${a.avg} ${money(e.btcAvg)}`, tag: e.btcUp ? 'PASS' : 'BLOCK', k: e.btcUp ? 'green' : 'red' });
+    A.push({ ic: '📈', name: a.filter, sub: fill(a.filterSub, { a: nTrend, n: e.coins.length }), tag: 'FILTER', k: 'amber' });
+    A.push({ ic: '🏆', name: a.ranker, sub: picks.length ? picks.map(c => `${c.c} ${pctTxt(c.ret30)}`).join(' · ') : a.rankerNone, tag: picks.length ? 'RANK' : 'IDLE', k: 'purple' });
+    A.push({ ic: '⚖️', name: a.sizer, sub: fill(a.sizerEq, { n: b.pick }), tag: 'SIZE', k: 'blue' });
+    A.push({ ic: '🛡️', name: a.stop, sub: fill(a.stopSub, { s: pctTxt(b.stop), a: (v.holdings || []).length, n: v.trades.filter(x => x.why === 'stop').length }), tag: 'ARMED', k: 'red' });
+  } else if (b.id === 'longterm') {
+    A.push({ ic: '🌳', name: a.holder, sub: 'BTC 70% · ETH 30%', tag: 'HOLD', k: 'green' });
+    A.push({ ic: '⚖️', name: a.rebal, sub: a.rebalSub, tag: 'MONTHLY', k: 'blue' });
+  } else {
+    for (const c of e.coins) {
+      const good = b.id === 'steps' ? c.score >= 2 : c.trend;
+      A.push({ ic: c.c === 'BTC' ? '₿' : 'Ξ', name: `${a.trend} ${c.c}`, sub: b.id === 'steps' ? fill(a.stepsSub, { s: c.score }) : `${money(c.p)} · ${a.avg} ${money(c.avg200)}`, tag: b.id === 'steps' ? `${c.score}/3` : c.trend ? 'PASS' : 'BLOCK', k: good ? 'green' : 'red' });
+    }
+    A.push({ ic: '⚖️', name: a.sizer, sub: b.id === 'steps' ? a.sizerSteps : 'BTC 60% · ETH 40%', tag: 'SIZE', k: 'blue' });
+  }
+  A.push({ ic: '📓', name: a.journal, sub: fill(a.journalSub, { n: v.trades.length }), tag: 'WRITE', k: 'grey' });
+  A.push({ ic: '😴', name: a.you, sub: fill(a.youSub, { t: when(v.nextAt) }), tag: 'ASLEEP', k: 'grey', you: true });
+  return A;
+}
+
+function countdown(ms) {
+  let m = Math.max(0, Math.round((ms - Date.now()) / 60e3));
+  const dd = Math.floor(m / 1440); m -= dd * 1440;
+  const h = Math.floor(m / 60); m -= h * 60;
+  return (dd ? dd + 'd ' : '') + (dd || h ? h + 'h ' : '') + m + 'm';
+}
+setInterval(() => { for (const el of document.querySelectorAll('[data-until]')) el.textContent = countdown(+el.dataset.until); }, 30e3);
 
 function botsScreen() {
   const t = T();
@@ -200,7 +286,7 @@ function testScreen() {
 function settingsScreen() {
   const t = T();
   return `<section class="card"><h3 id="l-lang">${t.language}</h3>${chips('lang', [['es', 'Español'], ['en', 'English']], S.set.lang, t.language)}
-      <h3>${t.theme}</h3>${chips('theme', ['auto', 'light', 'dark'].map(k => [k, t.themes[k]]), S.set.theme, t.theme)}
+      <h3>${t.theme}</h3>${chips('theme', ['terminal', 'auto', 'light', 'dark'].map(k => [k, t.themes[k]]), S.set.theme, t.theme)}
       <h3>${t.textSize}</h3>${chips('size', [1, 1.15, 1.3].map(k => [k, t.sizes[k]]), S.set.size, t.textSize)}</section>
     <section class="card real"><h3>🔒 ${t.realTitle} <span class="badge">${t.soon}</span></h3><p>${t.realText}</p></section>
     <section class="card"><h3>${t.glossary}</h3>${t.gloss.map(([k, v]) => `<details><summary>${k}</summary><p>${v}</p></details>`).join('')}</section>
@@ -250,6 +336,7 @@ function render(focusTop) {
   const t = T(), html = document.documentElement;
   html.lang = S.set.lang;
   html.dataset.theme = S.set.theme;
+  document.querySelectorAll('meta[name=theme-color]').forEach(m => m.content = S.set.theme === 'terminal' ? '#050B08' : m.media.includes('dark') ? '#0E1013' : '#F6F4EF');
   html.style.fontSize = (S.set.size * 100) + '%';
   const k = document.activeElement?.dataset?.k;
 

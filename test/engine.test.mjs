@@ -1,6 +1,6 @@
 // node test/engine.test.mjs — checks the bot rules on made-up prices (no internet needed).
 import assert from 'node:assert/strict';
-import { makeData, simulate, holdBTC, stats, yearly, runWallet, BOTS, botById, UNIVERSE, FEE, DAY } from '../engine.js';
+import { makeData, simulate, holdBTC, stats, yearly, runWallet, explain, tradeStats, BOTS, botById, UNIVERSE, FEE, DAY } from '../engine.js';
 
 let n = 0;
 const test = (name, fn) => { fn(); n++; console.log('ok -', name); };
@@ -128,6 +128,29 @@ test('random markets: every bot stays solvent and sensible over 5 years', () => 
       assert.ok(Object.keys(r.pos).length <= 3, bot.id + ' positions');
     }
   }
+});
+
+test('explain matches what the bot actually buys', () => {
+  const R = rng(5), walk = {};
+  for (const c of UNIVERSE) { let p = 50; walk[c] = Array.from({ length: 600 }, () => (p *= 1 + (R() - 0.47) * 0.05)); }
+  const d = market(600, (c, i) => walk[c][i]);
+  for (const bot of BOTS) {
+    const e = explain(bot, d);
+    const r = simulate(bot, d, { start: d.dates.length - 1 });
+    const bought = r.trades.map(t => t.c).sort(), picked = e.coins.filter(c => c.w > 0).map(c => c.c).sort();
+    assert.deepEqual(bought, picked, bot.id);
+    assert.equal(e.coins.length, bot.coins.length);
+  }
+});
+
+test('trade stats: wins and losses per sell', () => {
+  const s = tradeStats([
+    { c: 'A', side: 'buy', usd: 100, q: 10 }, { c: 'A', side: 'sell', usd: 150, q: 10 },
+    { c: 'B', side: 'buy', usd: 100, q: 10 }, { c: 'B', side: 'sell', usd: 40, q: 5 }, { c: 'B', side: 'sell', usd: 60, q: 5 },
+  ]);
+  assert.equal(s.wins, 2); assert.equal(s.losses, 1);
+  assert.ok(Math.abs(s.best.pct - 0.5) < 1e-9);
+  assert.ok(Math.abs(s.last.pnl - 10) < 1e-9);
 });
 
 console.log(`\n${n} tests passed`);
