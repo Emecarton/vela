@@ -203,7 +203,7 @@ const BLOB = {
 const blob = k => { const [c, d] = BLOB[k]; return `<svg class="blob" viewBox="0 0 40 40" aria-hidden="true"><path d="${d}" fill="${c}"/>
   <ellipse cx="15" cy="20" rx="3.4" ry="4.2" fill="#fff"/><ellipse cx="25" cy="20" rx="3.4" ry="4.2" fill="#fff"/>
   <circle cx="15.8" cy="21" r="1.9" fill="#0B0D12"/><circle cx="25.8" cy="21" r="1.9" fill="#0B0D12"/></svg>`; };
-const price = p => money(p < 1 ? +p.toPrecision(4) : p < 100 ? +p.toFixed(3) : p);
+const price = p => new Intl.NumberFormat(loc(), { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', useGrouping: 'always', minimumFractionDigits: p < 1 ? 4 : 2, maximumFractionDigits: p < 1 ? 5 : p < 100 ? 3 : 2 }).format(p);
 const qty = q => new Intl.NumberFormat(loc(), { maximumSignificantDigits: 5 }).format(q);
 const signed = v => (v >= 0 ? '+' : '−') + money(Math.abs(v));
 
