@@ -94,3 +94,18 @@ export async function ticker(coin) {
   const r = await get(`/api/v3/ticker/24hr?symbol=${coin}USDT`);
   return { p: +r.lastPrice, chg: +r.priceChangePercent / 100, vol: +r.quoteVolume, hi: +r.highPrice, lo: +r.lowPrice };
 }
+
+// A range of closed candles (pages of 1,000). Used by the ⚡ Live bot to catch up.
+export async function klinesRange(coin, interval, ms, from) {
+  const out = [];
+  let s = from;
+  for (let g = 0; g < 20; g++) {
+    const r = await get(`/api/v3/klines?symbol=${coin}USDT&interval=${interval}&limit=1000&startTime=${s}`);
+    if (!r.length) break;
+    out.push(...r);
+    if (r.length < 1000) break;
+    s = r[r.length - 1][0] + ms;
+  }
+  const now = Date.now();
+  return out.filter(r => r[6] < now).map(r => ({ t: r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4] }));
+}

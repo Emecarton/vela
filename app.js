@@ -1,6 +1,7 @@
 // app.js — the screens. No frameworks: plain HTML strings, one render() for everything.
 import { BOTS, botById, simulate, holdBTC, stats, yearly, runWallet, explain, tradeStats, DAY } from './engine.js';
-import { loadMarket, candles, ticker, TF } from './data.js';
+import { loadMarket, candles, ticker, TF, klinesRange } from './data.js';
+import { LIVE, newLiveState, liveStep, liveExplain } from './live.js';
 import { STR } from './i18n.js';
 
 const COIN = { BTC: 'Bitcoin', ETH: 'Ethereum', SOL: 'Solana', BNB: 'BNB', XRP: 'XRP', ADA: 'Cardano', DOGE: 'Dogecoin', AVAX: 'Avalanche', LINK: 'Chainlink', DOT: 'Polkadot', LTC: 'Litecoin', NEAR: 'NEAR', UNI: 'Uniswap', TRX: 'TRON', BCH: 'Bitcoin Cash' };
@@ -15,7 +16,7 @@ const S = {
   tab: 'practice', view: null,
   set: { lang: (navigator.language || 'es').startsWith('es') ? 'es' : 'en', theme: 'terminal', size: 1, onboarded: false, ...store.get('settings', {}) },
   wallets: store.get('wallets', []),
-  manual: store.get('manual', null), desk: {}, cnd: {}, tick: {}, trade: null, cndReq: null,
+  manual: store.get('manual', null), desk: {}, cnd: {}, tick: {}, trade: null, cndReq: null, lbars: {}, liveAt: 0, liveBusy: false,
   mk: null, loading: false, error: null,
   test: { bot: 'momentum', period: 1095 },
   setup: { bot: null, amt: 1000, start: 30 },
@@ -40,7 +41,9 @@ const fill = (s, o) => s.replace(/\{(\w+)\}/g, (_, k) => o[k]);
 
 // ---------- small pieces ----------
 const avatar = (b, big) => `<span class="av${big ? ' big' : ''}" style="--h:${b.hue}" aria-hidden="true">${b.icon}</span>`;
-const botName = b => T().bots[b.id].name;
+const botName = b => (b.kind === 'live' ? T().live.name : T().bots[b.id].name);
+const LIVE_BOT = { id: 'live', kind: 'live', icon: '⚡', hue: 48, risk: 5, stop: LIVE.stop, pick: 1, coins: LIVE.coins, every: 0 };
+const getBot = id => (id === 'live' ? LIVE_BOT : botById(id));
 const riskMeter = b => `<div class="risk" aria-label="${T().risk}: ${T().riskWords[b.risk]}">
   <span class="bars" aria-hidden="true">${[1, 2, 3, 4, 5].map(k => `<i class="${k <= b.risk ? 'on' : ''}" style="--k:${k}"></i>`).join('')}</span>
   <span>${T().risk}: <b>${T().riskWords[b.risk]}</b></span></div>`;
@@ -67,7 +70,63 @@ function chart(lines, label, h = 150) {
 // ---------- data ----------
 const memo = new Map();
 function cached(key, fn) { if (!memo.has(key)) memo.set(key, fn()); return memo.get(key); }
-function walletView(w) { return cached(`w|${w.id}|${S.mk.at}`, () => runWallet(w, S.mk.d, S.mk.live)); }
+function walletView(w) {
+  if (w.bot === 'live') return liveView(w);
+  return cached(`w|${w.id}|${S.mk.at}`, () => runWallet(w, S.mk.d, S.mk.live));
+}
+
+// ---------- ⚡ Live bot: runs on 15-minute candles, catches up whenever the app opens ----------
+const lastBar = c => { const b = S.lbars[c]; return b && b.length ? b[b.length - 1] : null; };
+function liveView(w) {
+  const st = w.st, o = st.pos;
+  const px = o ? (S.tick[o.c]?.p ?? lastBar(o.c)?.c ?? o.entry) : 0;
+  const value = st.cash + (o ? o.q * px : 0);
+  const trades = st.trades.map(x => ({ ...x, day: Math.floor(x.ts / DAY) }));
+  return {
+    bot: LIVE_BOT, pending: false, live: true, value, cash: st.cash, trades, checks: [],
+    holdings: o ? [{ c: o.c, value: o.q * px, gain: px / o.entry - 1, entry: o.entry, now: px }] : [],
+    eq: [...st.eq.map(x => x[1]), value], nextAt: (Math.floor(Date.now() / LIVE.ms) + 1) * LIVE.ms + 5e3, start: null,
+  };
+}
+async function ensureBars(from) {
+  await Promise.all(LIVE.coins.map(async c => {
+    const have = S.lbars[c];
+    let rows;
+    if (have && have.length && have[0].t <= from) {
+      const fresh = await klinesRange(c, '15m', LIVE.ms, have[have.length - 1].t + LIVE.ms);
+      rows = have.concat(fresh.filter(x => x.t > have[have.length - 1].t));
+    } else rows = await klinesRange(c, '15m', LIVE.ms, from);
+    S.lbars[c] = rows.slice(-4000);
+  }));
+}
+async function runLive(quiet) {
+  const ws = S.wallets.filter(w => w.bot === 'live');
+  if (!ws.length || S.liveBusy) return;
+  S.liveBusy = true;
+  try {
+    const warm = (LIVE.avg + LIVE.look + 8) * LIVE.ms;
+    for (const w of ws) if (!w.st) w.st = newLiveState(w.cash, w.startTs);
+    const from = Math.min(...ws.map(w => w.st.last)) - warm;
+    await ensureBars(from);
+    const fresh = [];
+    for (const w of ws) {
+      const before = w.st.trades.length;
+      liveStep(w.st, S.lbars);
+      if (!quiet) fresh.push(...w.st.trades.slice(before).filter(x => x.ts > Date.now() - 20 * 60e3));
+    }
+    saveWallets();
+    S.liveAt = Date.now();
+    for (const x of fresh) toast(fill(T().live.toast[x.side], { b: T().live.name, c: x.c, p: price(x.p), pnl: x.pnl == null ? '' : signed(x.pnl) }));
+    render();
+  } catch { }
+  S.liveBusy = false;
+}
+function toast(msg) {
+  const el = $('#toast'); if (!el) return;
+  const n = document.createElement('p'); n.textContent = msg; el.append(n); announce(msg);
+  setTimeout(() => n.remove(), 6000);
+}
+setInterval(() => { if (S.mk && Math.floor(Date.now() / LIVE.ms) !== Math.floor((S.liveAt || 0) / LIVE.ms)) runLive(); }, 30e3);
 
 async function refresh(manual) {
   if (S.loading) return;
@@ -75,6 +134,7 @@ async function refresh(manual) {
   try {
     S.mk = await loadMarket();
     memo.clear();
+    runLive(true);
     announce(S.mk.stale ? T().offline : manual ? T().updated : '');
   } catch (e) {
     S.error = T().loadError;
@@ -158,11 +218,16 @@ function manualBook(m) {
 const livePx = c => S.tick[c]?.p ?? S.mk?.live?.[c] ?? null;
 function manualValue(m) { const pos = manualBook(m); let v = m.cash; for (const c in pos) v += pos[c].q * (livePx(c) || 0); return v; }
 
-function deskState(id, firstCoin) {
-  if (S.desk.id !== id) S.desk = { id, coin: firstCoin, tf: '1M', pane: 0, seen: false };
+function deskState(id, firstCoin, tf = '1M') {
+  if (S.desk.id !== id) S.desk = { id, coin: firstCoin, tf, pane: 0, seen: false, auto: true };
+  else if (S.desk.auto && S.desk.coin !== firstCoin) S.desk.coin = firstCoin; // follow the bot until you pick a coin yourself
   return S.desk;
 }
 
+function liveE() {
+  const x = liveExplain(S.lbars);
+  return { ...x, day: Math.floor((x.t || Date.now()) / DAY), coins: x.coins.map(c => ({ ...c, ret30: c.r, up200: c.up, up2050: c.r1 == null ? null : c.r1 > 0 })) };
+}
 function deskScreen(id) {
   const t = T(), dk = t.desk;
   if (!S.mk) return statusBox();
@@ -172,10 +237,10 @@ function deskScreen(id) {
   const m = isManual ? ensureManual() : null;
   const v = isManual ? null : walletView(w);
   const b = isManual ? botById('momentum') : v.bot;
-  const e = cached(`e|${b.id}|${S.mk.at}`, () => explain(b, S.mk.d));
-  const first = v?.holdings?.[0]?.c || e.coins.find(c => c.w)?.c || e.coins[0].c;
-  const st = deskState(id, first);
-  const coins = e.coins.map(c => c.c);
+  const e = b.kind === 'live' ? liveE() : cached(`e|${b.id}|${S.mk.at}`, () => explain(b, S.mk.d));
+  const first = v?.holdings?.[0]?.c || e.coins.find(c => c.w)?.c || e.coins[0]?.c || 'BTC';
+  const st = deskState(id, first, b.kind === 'live' ? '1D' : '1M');
+  const coins = e.coins.length ? e.coins.map(c => c.c) : (b.coins || ['BTC']);
   if (!coins.includes(st.coin) && !S.mk.d.px[st.coin]) st.coin = first;
 
   const head = isManual
@@ -184,9 +249,9 @@ function deskScreen(id) {
         <div class="t-nums"><div><p class="lbl mono">${t.term.balance}</p><p class="t-big mono" data-manual-val>${money(manualValue(m))}</p><p>${chg(manualValue(m) / m.start - 1)}</p></div>
         <div class="t-wl mono"><p><b>${m.fills.length}</b> ${t.term.trades}</p></div></div></header>`
     : `<header class="panel t-head"><div class="t-top">${avatar(b)}<div class="t-id"><p class="t-name">VELA <span class="hl">DESK</span> <span class="ver">· ${esc(botName(b))}</span></p>
-        <p class="run mono"><i class="dot${v.pending ? ' wait' : ''}" aria-hidden="true"></i>${v.pending ? t.term.waitingFirst : t.term.running} · ${t.term.nextIn} <b data-until="${v.nextAt}">${countdown(v.nextAt)}</b></p></div>
+        <p class="run mono"><i class="dot${v.pending ? ' wait' : ''}" aria-hidden="true"></i>${v.pending ? t.term.waitingFirst : t.term.running} · ${v.live ? t.live.every + ' · ' : ''}${t.term.nextIn} <b data-until="${v.nextAt}">${countdown(v.nextAt)}</b></p></div>
         <span class="paper mono">${t.term.paper}</span></div>
-        <div class="t-nums"><div><p class="lbl mono">${t.term.balance}</p><p class="t-big mono">${money(v.value)}</p><p>${chg(v.value / w.cash - 1)}</p></div>
+        <div class="t-nums"><div><p class="lbl mono">${t.term.balance}</p><p class="t-big mono" data-wallet-val>${money(v.value)}</p><p>${chg(v.value / w.cash - 1)}</p></div>
         <div class="t-wl mono"><p><b>${v.trades.length}</b> ${t.term.trades}</p></div></div></header>`;
 
   const seg = `<div class="seg" role="tablist" aria-label="${dk.panes.join(', ')}">${dk.panes.map((p, k) =>
@@ -229,7 +294,7 @@ function drawCandles(rows, st, v) {
   const last = rows[n - 1].c, ms = rows.length > 1 ? rows[1].t - rows[0].t : DAY;
   const marks = [];
   const add = (ts, p, side) => { const k = Math.floor((ts - rows[0].t) / ms); if (k >= 0 && k < n) marks.push({ x: k * bw + bw / 2, y: y(Math.min(hi, Math.max(lo, p))), side }); };
-  if (v) for (const x of v.trades) if (x.c === st.coin) add((x.day + 1) * DAY - 1, x.p, x.side);
+  if (v) for (const x of v.trades) if (x.c === st.coin) add(x.ts ? x.ts - 1 : (x.day + 1) * DAY - 1, x.p, x.side);
   if (S.manual) for (const f of S.manual.fills) if (f.c === st.coin) add(f.ts, f.p, f.side);
   return `<svg viewBox="0 0 ${W} ${H}" class="cndl" role="img" aria-label="${esc(`$${st.coin} ${st.tf}: ${price(rows[0].o)} → ${price(last)}`)}">
     ${rows.map((r, k) => { const x = k * bw, up = r.c >= r.o, top = y(Math.max(r.o, r.c)), h = Math.max(1, Math.abs(y(r.o) - y(r.c)));
@@ -240,7 +305,8 @@ function drawCandles(rows, st, v) {
 }
 
 function analysisPane(st, b, e, v, w, m) {
-  const t = T(), dk = t.desk, c = e.coins.find(x => x.c === st.coin);
+ const t = T(), dk0 = t.desk, c = e.coins.find(x => x.c === st.coin);
+  const dk = b.kind === 'live' ? { ...dk0, chkBtc: t.live.chk.btc, chk200: t.live.chk.avg, chk2050: t.live.chk.hour, chkMom: t.live.chk.move, chkTop: t.live.chk.top } : dk0;
   const row = (label, val, ok) => `<li><span>${label}</span><b class="mono ${ok == null ? '' : ok ? 'pass' : 'fail'}">${val}</b></li>`;
   let checks = '';
   if (c) {
@@ -266,15 +332,16 @@ function analysisPane(st, b, e, v, w, m) {
       ${rows.length ? `<ol class="dtrades mono">${rows.map((f, k) => `<li><span class="dn">#${rows.length - k}</span><span>${f.side === 'buy' ? dk.buy : dk.sell} <b>$${f.c}</b><br><span class="muted">${qty(f.q)} @ ${price(f.p)}</span></span><span class="r">${money(f.usd)}<br><span class="muted">${new Date(f.ts).toLocaleString(loc(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></span></li>`).join('')}</ol>` : `<p class="muted small">${dk.noDeskTrades}</p>`}`;
   } else {
     const ts = tradeStats(v.trades), d = S.mk.d;
-    const openRows = ts.open.map(o => { const h = v.holdings.find(x => x.c === o.c), now = h ? h.now : o.entry; return { c: o.c, entry: o.entry, exit: now, pnl: o.q * now - o.cost, days: o.since != null ? d.dates[d.dates.length - 1] - o.since : 0, open: true }; });
-    const closed = ts.sells.map(s => ({ c: s.c, entry: s.entry, exit: s.p, pnl: s.pnl, days: s.since != null ? s.day - s.since : 0, open: false }));
+    const hrs = (a, z) => Math.max(0, Math.round((z - a) / 36e5));
+    const openRows = ts.open.map(o => { const h = v.holdings.find(x => x.c === o.c), now = h ? h.now : o.entry; return { c: o.c, entry: o.entry, exit: now, pnl: o.q * now - o.cost, days: o.since != null ? d.dates[d.dates.length - 1] - o.since : 0, hours: o.sinceTs ? hrs(o.sinceTs, Date.now()) : null, open: true }; });
+    const closed = ts.sells.map(s => ({ c: s.c, entry: s.entry, exit: s.p, pnl: s.pnl, days: s.since != null ? s.day - s.since : 0, hours: s.sinceTs ? hrs(s.sinceTs, s.ts) : null, open: false }));
     const all = [...openRows, ...closed.reverse()];
     desk = `<h3 class="t-h mono">${dk.deskT}</h3><p class="lbl mono">${dk.bank} · ${fill(dk.startedWith, { usd: money(w.cash) })}</p>
       <p class="bank mono ${v.value >= w.cash ? 'up-t' : 'down-t'}">${money(v.value)}</p>
       <p class="lbl-xs mono">${fill(dk.tradesLine, { n: v.trades.length, g: ts.wins, r: ts.losses, w: ts.worst ? signed(ts.worst.pnl) : '—' })}</p>
       ${v.eq.length > 2 ? chart([{ v: v.eq, cls: 'main' }], `${money(w.cash)} → ${money(v.value)}`, 70) : ''}
       ${all.length ? `<ol class="dtrades mono">${all.map((x, k) => `<li><span class="dn">#${all.length - k}</span>
-        <span><b>$${x.c}</b> ${price(x.entry)} → ${price(x.exit)}<br><span class="muted">${fill(dk.inDays, { n: x.days })} · <span class="${x.open ? 'st-open' : ''}">${x.open ? dk.open : dk.closed}</span></span></span>
+        <span><b>$${x.c}</b> ${price(x.entry)} → ${price(x.exit)}<br><span class="muted">${x.hours != null ? fill(t.live.inHours, { n: x.hours }) : fill(dk.inDays, { n: x.days })} · <span class="${x.open ? 'st-open' : ''}">${x.open ? dk.open : dk.closed}</span></span></span>
         <span class="r ${x.pnl >= 0 ? 'up-t' : 'down-t'}">${signed(x.pnl)}</span></li>`).join('')}</ol>` : `<p class="muted small">${dk.noDeskTrades}</p>`}`;
   }
   return `<div class="ana">${anaHead}${checks}</div><div class="dsk">${desk}</div>`;
@@ -293,6 +360,7 @@ function chatMessages(b, v, w, m) {
     return msgs;
   }
   if (v.pending) { say('vela', fill(ch.waitFirst, { usd: money(w.cash), t: when(v.nextAt) })); return msgs; }
+  if (v.live) return liveChat(b, v, w);
   const d = S.mk.d, rows = tradeStats(v.trades).rows, checks = v.checks.slice(-8);
   const from = checks.length ? checks[0].day : Infinity;
   const byDay = new Map();
@@ -333,14 +401,49 @@ function chatMessages(b, v, w, m) {
   return groups.reverse().flat().slice(0, 70); // newest day first
 }
 
+function liveChat(b, v, w) {
+  const ch = T().chat, lc = T().live.chat, out = [];
+  const e = liveE(), g0 = [{ sep: 'now' }], put0 = (who, text, ts) => g0.push({ who, text, ts });
+  if (e.coins.length) {
+    put0('scanner', fill(lc.scan, { n: e.coins.length, a: e.coins.filter(x => x.trend).length }));
+    if (e.btcAvg) put0('market', fill(e.btcUp ? lc.btcUp : lc.btcDown, { d: pctTxt(e.btc / e.btcAvg - 1) }));
+    const top = e.coins.filter(x => x.r != null).sort((a, z) => z.r - a.r)[0];
+    if (top) put0('analyst', fill(lc.strongest, { c: top.c, r: pctTxt(top.r) }));
+    const h = v.holdings[0];
+    put0('vela', h ? fill(lc.holding, { c: h.c, g: pctTxt(h.gain) }) : lc.waiting);
+  }
+  out.push(g0);
+  const rows = tradeStats(v.trades).rows.slice(-40);
+  let g = null, day = null;
+  for (const x of rows) {
+    const d = Math.floor(x.ts / DAY);
+    if (d !== day) { g = [{ sep: d }]; out.splice(1, 0, g); day = d; }
+    const put = (who, text) => g.push({ who, text, ts: x.ts });
+    if (x.side === 'buy') {
+      put('scanner', fill(lc.strongest, { c: x.c, r: pctTxt(x.move ?? 0) }));
+      put('vela', fill(ch.buy, { c: x.c }));
+      put('sizer', fill(ch.size, { usd: money(x.usd), c: x.c }));
+      put('fills', fill(ch.filled, { p: price(x.p), fee: money(x.usd * FEE) }));
+      put('risk', fill(ch.armed, { s: pctTxt(LIVE.stop), p: price(x.p * (1 + LIVE.stop)) }));
+    } else {
+      put(x.why === 'live_stop' || x.why === 'live_profit' ? 'risk' : 'analyst', fill(ch.why, { c: x.c, why: T().why[x.why] || '' }));
+      put('vela', fill(ch.sell, { c: x.c }));
+      put('fills', fill(ch.closed, { pnl: signed(x.pnl), c: x.c }));
+    }
+  }
+  // newest first inside each day too, so the latest move is at the top
+  return out.flatMap((grp, k) => k === 0 ? grp : [grp[0], ...groupByTrade(grp.slice(1)).reverse().flat()]).slice(0, 80);
+}
+function groupByTrade(msgs) { const gs = []; for (const m of msgs) { const last = gs[gs.length - 1]; if (last && last[0].ts === m.ts) last.push(m); else gs.push([m]); } return gs; }
+
 function chatPane(b, v, w, m) {
   const t = T(), names = t.chat.names, msgs = chatMessages(b, v, w, m);
   const animate = !S.desk.seen; S.desk.seen = true;
   const nAnim = Math.min(6, msgs.length);
   return `<h3 class="t-h mono">${t.desk.agentsT} <span class="muted">· ${t.desk.live}</span><i class="dot" aria-hidden="true"></i></h3>
     <ol class="chat" aria-live="off">${msgs.map((x, k) => x.sep != null
-      ? `<li class="sep mono">${dayDate(x.sep, { weekday: 'short', day: 'numeric', month: 'short' })}</li>`
-      : `<li class="msg${animate && k <= nAnim ? ' pop' : ''}" style="--i:${k}">${blob(x.who)}<div><b>${names[x.who]}</b><p>${esc(x.text)}</p></div></li>`).join('')}</ol>`;
+      ? `<li class="sep mono">${x.sep === 'now' ? `<span class="now">${t.live.chat.now}</span>` : dayDate(x.sep, { weekday: 'short', day: 'numeric', month: 'short' })}</li>`
+      : `<li class="msg${animate && k <= nAnim ? ' pop' : ''}" style="--i:${k}">${blob(x.who)}<div><b>${names[x.who]}${x.ts ? ` <time class="mono">${new Date(x.ts).toLocaleTimeString(loc(), { hour: '2-digit', minute: '2-digit' })}</time>` : ''}</b><p>${esc(x.text)}</p></div></li>`).join('')}</ol>`;
 }
 
 function tradeDialog() {
@@ -401,6 +504,8 @@ async function pollTick() {
     if (ch) ch.innerHTML = chg(tk.chg);
     if (hl) hl.innerHTML = hilo(tk);
     const mv = document.querySelector('[data-manual-val]'); if (mv && S.manual) mv.textContent = money(manualValue(S.manual));
+    const lw = S.wallets.find(x => x.id === S.view && x.bot === 'live'), wv = document.querySelector('[data-wallet-val]');
+    if (lw && wv) wv.textContent = money(liveView(lw).value);
   } catch { }
 }
 setInterval(pollTick, 10e3);
@@ -408,7 +513,15 @@ setInterval(() => { if (S.view) loadCandles(); }, 60e3);
 
 function botsScreen() {
   const t = T();
-  return `<p class="lead">${t.riskNote}</p><ul class="list">${BOTS.map(b => {
+  const L = t.live, lb = LIVE_BOT;
+  const liveCard = `<li class="card bot live-card" style="--h:${lb.hue}">
+      <div class="row">${avatar(lb, true)}<div><h2>${L.name}</h2><span class="badge">${L.tag}</span></div></div>
+      <p>${L.line}</p>${riskMeter(lb)}
+      <p class="muted">${L.checks} · ${T().gloss[1][0]} ${pctTxt(LIVE.stop)}</p>
+      <dl class="gb"><div><dt>👍 ${t.goodWhen}</dt><dd>${L.good}</dd></div><div><dt>👎 ${t.badWhen}</dt><dd>${L.bad}</dd></div></dl>
+      <p class="small live-past">🧪 ${L.past}</p>
+      <div class="actions"><button class="btn primary" data-act="setup" data-v="live" data-k="setup-live">${t.practiceBtn}</button></div></li>`;
+  return `<p class="lead">${t.riskNote}</p><ul class="list">${liveCard}${BOTS.map(b => {
     const s = t.bots[b.id];
     return `<li class="card bot" style="--h:${b.hue}">
       <div class="row">${avatar(b, true)}<div><h2>${s.name}</h2>${b.flagship ? `<span class="badge">${t.flagship}</span>` : ''}</div></div>
@@ -487,9 +600,19 @@ function onboarding() {
 }
 
 function setupDialog() {
-  const t = T(), b = botById(S.setup.bot);
+  const t = T(), b = getBot(S.setup.bot);
   if (!b) return '';
   const amt = S.setup.amt, st = S.setup.start;
+  if (b.kind === 'live') {
+    const ls = [0, 1, 3, 7].includes(st) ? st : 1;
+    return `<form method="dialog" class="sheet">
+    <div class="row">${avatar(b, true)}<div><p class="muted">${t.setupTitle}</p><h2 id="setup-title">${botName(b)}</h2></div></div>
+    <p class="label">${t.amount}</p>${chips('amt', [100, 500, 1000, 10000].map(v => [v, money(v)]), amt, t.amount)}
+    <p class="label">${t.startWhen}</p>${chips('start', [0, 1, 3, 7].map(v => [v, t.live.startOpts[v]]), ls, t.startWhen)}
+    <p class="muted">${ls ? t.live.pastHint : t.live.nowHint}</p>
+    <div class="actions"><button class="btn primary" value="ok" data-act="create" data-k="create">${t.startBtn}</button>
+    <button class="btn ghost" value="cancel" data-act="close" data-k="cancel">${t.cancel}</button></div></form>`;
+  }
   return `<form method="dialog" class="sheet">
     <div class="row">${avatar(b, true)}<div><p class="muted">${t.setupTitle}</p><h2 id="setup-title">${botName(b)}</h2></div></div>
     <p class="label">${t.amount}</p>${chips('amt', [100, 500, 1000, 10000].map(v => [v, money(v)]), amt, t.amount)}
@@ -568,12 +691,17 @@ const ACT = {
   start(v) { S.setup.start = +v; render(); },
   create() {
     const today = Math.floor(Date.now() / DAY); // the day whose close is next
-    const w = { id: Math.random().toString(36).slice(2, 9), bot: S.setup.bot, cash: S.setup.amt, startDay: today - S.setup.start, created: Date.now() };
+    const isLive = S.setup.bot === 'live', ls = [0, 1, 3, 7].includes(S.setup.start) ? S.setup.start : 1;
+    const w = isLive
+      ? { id: Math.random().toString(36).slice(2, 9), bot: 'live', cash: S.setup.amt, startTs: Date.now() - ls * DAY, created: Date.now() }
+      : { id: Math.random().toString(36).slice(2, 9), bot: S.setup.bot, cash: S.setup.amt, startDay: today - S.setup.start, created: Date.now() };
+    if (isLive) w.st = newLiveState(w.cash, w.startTs);
     S.wallets.push(w); saveWallets();
     S.setup.bot = null; S.tab = 'practice'; S.view = w.id; render(true); scrollTo(0, 0);
+    if (isLive) { S.liveAt = 0; runLive(true); }
   },
   pane(v) { S.desk.pane = +v; render(); },
-  coin(v) { S.desk.coin = v; render(); },
+  coin(v) { S.desk.coin = v; S.desk.auto = false; render(); },
   tf(v) { S.desk.tf = v; render(); },
   trade(v) { ensureManual(); S.trade = { side: v, coin: S.desk.coin, amt: '0' }; render(); },
   tclose() { S.trade = null; render(); },

@@ -7,13 +7,14 @@ export const LIVE = {
   coins: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'LINK'],
   ms: 15 * 60e3,   // candle size
   avg: 96,         // 24-hour average (96 × 15 min)
-  look: 16,        // "strength" = move over the last 4 hours
-  minMove: 0.01,   // needs at least +1% in 4 h to be interesting
-  stop: -0.03,     // safety stop: −3% from the buy price
-  trailAt: 0.03,   // once +3% up…
-  trail: 0.015,    // …sell if it falls 1.5% from its best price
-  maxBars: 96,     // never hold longer than 24 h
-  cool: 4,         // wait 1 h after selling before buying again
+  look: 48,        // "strength" = move over the last 12 hours
+  minMove: 0.02,   // needs at least +2% in 12 h to be interesting
+  stop: -0.05,     // safety stop: −5% from the buy price
+  trailAt: 0.05,   // once +5% up…
+  trail: 0.025,    // …sell if it falls 2.5% from its best price
+  maxBars: 288,    // never hold longer than 3 days
+  cool: 16,        // wait 4 h after selling before buying again
+  // Settings picked on real 15-minute prices (Aug–Nov 2026): the faster version traded ~3×/day and fees ate it.
   size: 0.98,      // use 98% of the cash per trade
 };
 

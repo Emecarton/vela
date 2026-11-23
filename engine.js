@@ -213,15 +213,15 @@ export function tradeStats(trades) {
   const book = {}, sells = [], rows = [];
   for (const t of trades) {
     const b = book[t.c] || (book[t.c] = { q: 0, cost: 0 });
-    if (t.side === 'buy') { if (!b.q) b.since = t.day; b.q += t.q; b.cost += t.usd; rows.push(t); }
+    if (t.side === 'buy') { if (!b.q) { b.since = t.day; b.sinceTs = t.ts; } b.q += t.q; b.cost += t.usd; rows.push(t); }
     else {
       const share = b.q ? Math.min(1, t.q / b.q) : 1, cost = b.cost * share;
-      const s = { ...t, pnl: t.usd - cost, pct: cost ? t.usd / cost - 1 : 0, entry: t.q ? cost / t.q : t.p, since: b.since };
+      const s = { ...t, pnl: t.usd - cost, pct: cost ? t.usd / cost - 1 : 0, entry: t.q ? cost / t.q : t.p, since: b.since, sinceTs: b.sinceTs };
       sells.push(s); rows.push(s);
       b.q -= t.q; b.cost -= cost; if (b.q <= 1e-12) { b.q = 0; b.cost = 0; }
     }
   }
   const wins = sells.filter(s => s.pnl > 0).length;
-  const open = Object.entries(book).filter(([, b]) => b.q > 0).map(([c, b]) => ({ c, q: b.q, cost: b.cost, entry: b.cost / b.q, since: b.since }));
+  const open = Object.entries(book).filter(([, b]) => b.q > 0).map(([c, b]) => ({ c, q: b.q, cost: b.cost, entry: b.cost / b.q, since: b.since, sinceTs: b.sinceTs }));
   return { rows, sells, open, wins, losses: sells.length - wins, worst: sells.reduce((m, s) => (!m || s.pnl < m.pnl ? s : m), null), best: sells.reduce((m, s) => (!m || s.pct > m.pct ? s : m), null), last: sells[sells.length - 1] || null };
 }

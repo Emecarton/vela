@@ -23,15 +23,15 @@ test('buys the strongest coin when Bitcoin is above its 24h average', () => {
   assert.ok(st.trades[0].ts >= T0 + 120 * MS);
 });
 
-test('safety stop sells at −3% (or the open if it gapped lower)', () => {
-  const bars = mk(200, (c, k) => 100 * (1 + (c === 'SOL' ? 0.002 : 0.0005)) ** k * (c === 'SOL' && k >= 150 ? 0.9 : 1));
+test('safety stop sells at −5% (or the open if it gapped lower)', () => {
+  const bars = mk(200, (c, k) => 100 * (1 + (c === 'SOL' ? 0.002 : 0.0005)) ** k * (c === 'SOL' && k >= 135 ? 0.85 : 1));
   const st = liveStep(newLiveState(1000, T0 + 120 * MS), bars);
   const s = st.trades.find(t => t.why === 'live_stop');
   assert.ok(s && s.c === 'SOL');
   assert.ok(s.pnl < 0);
 });
 
-test('trailing profit: sells after giving back 1.5% from the top once +3% up', () => {
+test('trailing profit: sells after giving back 2.5% from the top once +5% up', () => {
   const bars = mk(260, (c, k) => c === 'SOL' ? (k < 160 ? 100 * 1.002 ** k : 100 * 1.002 ** 160 * 0.996 ** (k - 160)) : 100 * 1.0004 ** k);
   const st = liveStep(newLiveState(1000, T0 + 120 * MS), bars);
   const s = st.trades.find(t => t.why === 'live_profit');

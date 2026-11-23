@@ -1,7 +1,7 @@
 // Offline support: the app files are kept on the phone. Always tries the newest version first,
 // falls back to the saved copy with no signal. Prices are handled by the app itself (saved in storage).
-const C = 'vela-v4';
-const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'engine.js', 'data.js', 'i18n.js', 'manifest.webmanifest', 'icon-192.png'];
+const C = 'vela-v5';
+const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'engine.js', 'data.js', 'live.js', 'i18n.js', 'manifest.webmanifest', 'icon-192.png'];
 self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(caches.open(C).then(c => c.addAll(SHELL)).catch(() => {})); });
 self.addEventListener('activate', e => e.waitUntil(caches.keys()
   .then(ks => Promise.all(ks.filter(k => k.startsWith('vela-') && k !== C).map(k => caches.delete(k))))
