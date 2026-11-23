@@ -153,4 +153,14 @@ test('trade stats: wins and losses per sell', () => {
   assert.ok(Math.abs(s.last.pnl - 10) < 1e-9);
 });
 
+test('checks are recorded and open positions are reported', () => {
+  const d = market(300, (c, i) => 10 * 1.003 ** i);
+  const r = simulate(botById('momentum'), d, { start: 0 });
+  assert.equal(r.checks.length, Math.floor(299 / 7) + 1);
+  assert.deepEqual(r.checks.at(-1).picks.sort(), Object.keys(r.pos).sort());
+  const s = tradeStats(r.trades);
+  assert.deepEqual(s.open.map(o => o.c).sort(), Object.keys(r.pos).sort());
+  for (const o of s.open) assert.ok(Math.abs(o.q - r.pos[o.c].q) < 1e-9);
+});
+
 console.log(`\n${n} tests passed`);

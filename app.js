@@ -1,6 +1,6 @@
 // app.js — the screens. No frameworks: plain HTML strings, one render() for everything.
 import { BOTS, botById, simulate, holdBTC, stats, yearly, runWallet, explain, tradeStats, DAY } from './engine.js';
-import { loadMarket } from './data.js';
+import { loadMarket, candles, ticker, TF } from './data.js';
 import { STR } from './i18n.js';
 
 const COIN = { BTC: 'Bitcoin', ETH: 'Ethereum', SOL: 'Solana', BNB: 'BNB', XRP: 'XRP', ADA: 'Cardano', DOGE: 'Dogecoin', AVAX: 'Avalanche', LINK: 'Chainlink', DOT: 'Polkadot', LTC: 'Litecoin', NEAR: 'NEAR', UNI: 'Uniswap', TRX: 'TRON', BCH: 'Bitcoin Cash' };
@@ -15,6 +15,7 @@ const S = {
   tab: 'practice', view: null,
   set: { lang: (navigator.language || 'es').startsWith('es') ? 'es' : 'en', theme: 'terminal', size: 1, onboarded: false, ...store.get('settings', {}) },
   wallets: store.get('wallets', []),
+  manual: store.get('manual', null), desk: {}, cnd: {}, tick: {}, trade: null, cndReq: null,
   mk: null, loading: false, error: null,
   test: { bot: 'momentum', period: 1095 },
   setup: { bot: null, amt: 1000, start: 30 },
@@ -93,13 +94,14 @@ function statusBox() {
 
 function practice() {
   const t = T();
-  if (!S.wallets.length) return `<p class="lead">${t.practiceNote}</p>
+  if (!S.wallets.length && !S.manual) return `<p class="lead">${t.practiceNote}</p>
     <div class="card empty"><div class="empty-art" aria-hidden="true">⛵</div><h2>${t.emptyTitle}</h2><p>${t.emptyText}</p>
     <button class="btn primary" data-act="tab" data-v="bots" data-k="go-bots">${t.emptyBtn}</button></div>`;
   const box = statusBox();
   if (!S.mk) return box;
   const views = S.wallets.map(w => [w, walletView(w)]);
-  const total = views.reduce((a, [, v]) => a + v.value, 0), base = S.wallets.reduce((a, w) => a + w.cash, 0);
+  const mv = S.manual ? manualValue(S.manual) : 0;
+  const total = views.reduce((a, [, v]) => a + v.value, 0) + mv, base = S.wallets.reduce((a, w) => a + w.cash, 0) + (S.manual ? S.manual.start : 0);
   return `${box}<section class="card hero" aria-label="${t.total}">
       <p class="muted">${t.total} · ${t.practiceNote}</p>
       <p class="big">${money(total)}</p>
@@ -112,110 +114,11 @@ function practice() {
         ${avatar(b)}<span class="wl-main"><span class="wl-name">${botName(b)}</span><span class="muted">${esc(hold)}</span></span>
         <span class="wl-val"><span class="wl-money">${money(v.value)}</span>${chg(v.value / w.cash - 1)}</span>
       </button></li>`;
-    }).join('')}</ul>
-    <button class="btn ghost wide" data-act="tab" data-v="bots" data-k="add-bot">+ ${t.addBot}</button>`;
-}
-
-function walletDetail(id) {
-  const t = T(), tt = t.term, w = S.wallets.find(x => x.id === id);
-  if (!w) { S.view = null; return practice(); }
-  if (!S.mk) return statusBox();
-  const v = walletView(w), b = v.bot, d = S.mk.d;
-  const e = cached(`e|${b.id}|${S.mk.at}`, () => explain(b, d));
-  const ts = tradeStats(v.trades);
-  const picks = e.coins.filter(c => c.w > 0), nBlocked = e.coins.filter(c => !c.trend).length;
-  const blockedAll = b.pick && !e.btcUp;
-  const startDay = v.start != null ? d.dates[v.start] : w.startDay;
-  const dm = day => dayDate(day, { day: '2-digit', month: '2-digit' });
-  const ag = agents(b, e, v);
-
-  const head = `<header class="panel t-head">
-      <div class="t-top">${avatar(b)}<div class="t-id"><p class="t-name">VELA <span class="hl">TERMINAL</span> <span class="ver">· ${esc(botName(b))}</span></p>
-        <p class="run mono"><i class="dot${v.pending ? ' wait' : ''}" aria-hidden="true"></i>${v.pending ? tt.waitingFirst : tt.running} · ${tt.nextIn} <b data-until="${v.nextAt}">${countdown(v.nextAt)}</b></p></div>
-        <span class="paper mono">${tt.paper}</span></div>
-      <div class="t-nums"><div><p class="lbl mono">${tt.balance}</p><p class="t-big mono">${money(v.value)}</p><p>${chg(v.value / w.cash - 1)}</p></div>
-        <div class="t-wl mono"><p><b>${v.trades.length}</b> ${tt.trades}</p><p><b class="up-t">${ts.wins}</b> / <b class="down-t">${ts.losses}</b></p></div></div>
-    </header>`;
-
-  const tok = [...picks, ...e.coins.filter(c => !c.w)].slice(0, 4);
-  const tx = k => 12 + k * (316 / Math.max(1, tok.length)) + (316 / Math.max(1, tok.length) - 74) / 2;
-  const flow = `<section class="panel flow" aria-label="${tt.flow}">
-      <h3 class="t-h mono">${tt.flow}</h3>
-      <svg viewBox="0 0 340 214" class="flow-svg" role="img" aria-label="${esc(`${tt.checked.replace('{n}', e.coins.length)}. ${tt.blockedNode}: ${blockedAll ? e.coins.length : nBlocked}. ${tt.pickNode}: ${picks.map(p => p.c).join(', ') || '—'}`)}">
-        <defs><radialGradient id="g-core"><stop offset="0" stop-color="var(--accent)" stop-opacity=".35"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></radialGradient></defs>
-        ${tok.map((c, k) => { const cls = c.w ? 'pick' : c.trend && !blockedAll ? 'ok' : 'out', x = tx(k);
-          return `<path class="wire ${cls}" d="M${x + 37} 46 C${x + 37} 90 170 80 170 104"/>
-          <g class="tok ${cls}"><rect x="${x}" y="6" width="74" height="40" rx="9"/><text x="${x + 37}" y="23" text-anchor="middle" class="t1">$${c.c}</text>
-          <text x="${x + 37}" y="38" text-anchor="middle" class="t2">${c.ret30 == null ? '—' : pctTxt(c.ret30)}</text></g>`; }).join('')}
-        <path class="wire out" d="M136 142 L74 142"/><path class="wire pick" d="M204 142 L266 142"/>
-        <circle cx="170" cy="142" r="62" fill="url(#g-core)" class="halo"/>
-        <circle cx="170" cy="142" r="34" class="core"/><text x="170" y="152" text-anchor="middle" class="core-i">⛵</text>
-        <text x="170" y="196" text-anchor="middle" class="lbl-s">${tt.core}</text><text x="170" y="209" text-anchor="middle" class="lbl-xs">${tt.checked.replace('{n}', e.coins.length)}</text>
-        <g class="node out"><circle cx="48" cy="142" r="24"/><path d="M48 130 L60 151 L36 151 Z" class="tri"/><text x="48" y="186" text-anchor="middle" class="lbl-s">${tt.blockedNode}</text><text x="48" y="199" text-anchor="middle" class="lbl-xs">${blockedAll ? e.coins.length : nBlocked}</text></g>
-        <g class="node pick"><circle cx="292" cy="142" r="24"/><circle cx="292" cy="142" r="13" class="ring"/><circle cx="292" cy="142" r="4" class="ring-dot"/>
-          <text x="292" y="186" text-anchor="middle" class="lbl-s">${picks.length ? tt.pickNode : tt.cashNode}</text><text x="292" y="199" text-anchor="middle" class="lbl-xs">${picks.map(p => p.c).join(' ') || '$'}</text></g>
-      </svg>
-      <ul class="coins mono" aria-label="${t.ag.radar}">${e.coins.map(c => `<li class="${c.w ? 'pick' : c.trend && !blockedAll ? 'ok' : 'out'}"><b>${c.c}</b> ${c.ret30 == null ? '' : pctTxt(c.ret30)}</li>`).join('')}</ul>
-    </section>`;
-
-  const stat = (label, val, sub, cls = '') => `<div class="panel tstat"><p class="lbl mono">${label}</p><p class="tv mono ${cls}">${val}</p><p class="lbl-xs mono">${sub}</p></div>`;
-  const stats4 = `<section class="tstats">
-      ${stat(tt.blocked, blockedAll ? e.coins.length : nBlocked, tt.blockedSub.replace('{n}', e.coins.length), 'down-t')}
-      ${stat(tt.best, ts.best ? pctTxt(ts.best.pct) : '—', ts.best ? '$' + ts.best.c : '', ts.best && ts.best.pct >= 0 ? 'up-t' : 'down-t')}
-      ${stat(tt.winRate, ts.sells.length ? Math.round(ts.wins / ts.sells.length * 100) + '%' : '—', `${ts.wins}W / ${ts.losses}L`)}
-      ${stat(tt.lastSell, ts.last ? (ts.last.pnl >= 0 ? '+' : '−') + money(Math.abs(ts.last.pnl)) : '—', ts.last ? '$' + ts.last.c : '', ts.last ? (ts.last.pnl >= 0 ? 'up-t' : 'down-t') : '')}
-    </section>`;
-
-  const agentsBox = `<section class="panel"><h3 class="t-h mono">${tt.agents} <span class="muted">· ${tt.agentsN.replace('{n}', ag.length)}</span></h3>
-      <ul class="agents">${ag.map(a => `<li class="agent k-${a.k}${a.you ? ' you' : ''}"><span class="ai" aria-hidden="true">${a.ic}</span>
-        <span class="an"><b class="mono">${a.name}</b><span class="mono">${esc(a.sub)}</span></span><span class="tag mono">${a.tag}</span></li>`).join('')}</ul></section>`;
-
-  const lastWhy = c => [...v.trades].reverse().find(x => x.c === c && x.side === 'buy')?.why;
-  const pos = `<section class="panel"><h3 class="t-h mono">${tt.position}</h3>${(v.holdings || []).length ? (v.holdings || []).map(h => `<div class="pos">
-      <div class="pos-h"><b class="mono">$${h.c}</b> <span class="muted">${COIN[h.c] || ''}</span> <span class="tag mono k-green">${tt.open}</span><span class="pos-g">${chg(h.gain)}</span></div>
-      <dl class="pos-g4 mono"><div><dt>${tt.entry}</dt><dd>${money(h.entry)}</dd></div><div><dt>${tt.now}</dt><dd>${money(h.now)}</dd></div><div><dt>${tt.size}</dt><dd>${money(h.value)}</dd></div></dl>
-      <p class="lbl-xs mono">${tt.reason}: ${t.why[lastWhy(h.c)] || '—'}</p></div>`).join('')
-    : `<p class="mono cashwhy">${tt.cashWhy} <b>${v.pending ? t.waiting + ' ' + when(v.nextAt) : t.why[e.out] || '—'}</b></p>`}
-      <p class="lbl-xs mono">${t.cash}: ${money(v.cash)}</p></section>`;
-
-  const eq = v.eq.length > 2 ? `<section class="panel"><h3 class="t-h mono">${tt.equity}</h3>
-      ${chart([{ v: v.eq, cls: 'main' }], `${money(w.cash)} → ${money(v.value)}`, 120)}
-      <div class="eq-row mono"><span>${tt.start} ${dayDate(startDay, { day: 'numeric', month: 'short' })}<br><b>${money(w.cash)}</b></span><span class="r">${tt.now}<br><b>${money(v.value)}</b></span></div></section>` : '';
-
-  const rows = [...ts.rows].reverse().slice(0, 40);
-  const log = `<section class="panel log"><h3 class="t-h mono"><span class="hl">$</span> ${tt.log} <span class="muted">· ${tt.lines.replace('{n}', v.trades.length)}</span></h3>
-      ${rows.length ? `<ul class="mono">${rows.map(x => { const kind = x.why === 'stop' ? 'stop' : x.side;
-        return `<li><span class="ts">${dm(x.day)}</span><span class="side ${kind}">${tt[kind]}</span><b>$${x.c}</b><span class="amt ${x.pnl == null ? '' : x.pnl >= 0 ? 'up-t' : 'down-t'}">${x.pnl == null ? money(x.usd) : (x.pnl >= 0 ? '+' : '−') + money(Math.abs(x.pnl))}</span>
-        <span class="rs">${t.why[x.why] || ''}</span></li>`; }).join('')}</ul>` : `<p class="mono muted">${tt.emptyLog}</p>`}</section>`;
-
-  return `<div class="term"><button class="back" data-act="back" data-k="back"><span aria-hidden="true">‹</span> ${t.back}</button>
-    ${head}${flow}${stats4}${agentsBox}${pos}${eq}${log}
-    <button class="btn danger wide" data-act="remove" data-v="${w.id}" data-k="remove">${t.stopBot}</button></div>`;
-}
-
-function agents(b, e, v) {
-  const a = T().ag, A = [], nTrend = e.coins.filter(c => c.trend).length;
-  A.push({ ic: '📡', name: a.radar, sub: fill(a.radarSub, { n: e.coins.length, d: dayDate(e.day, { day: 'numeric', month: 'short' }) }), tag: 'SCAN', k: 'cyan' });
-  if (b.pick) {
-    const picks = e.coins.filter(c => c.w > 0);
-    A.push({ ic: '🧭', name: a.btc, sub: `BTC ${money(e.btc)} · ${a.avg} ${money(e.btcAvg)}`, tag: e.btcUp ? 'PASS' : 'BLOCK', k: e.btcUp ? 'green' : 'red' });
-    A.push({ ic: '📈', name: a.filter, sub: fill(a.filterSub, { a: nTrend, n: e.coins.length }), tag: 'FILTER', k: 'amber' });
-    A.push({ ic: '🏆', name: a.ranker, sub: picks.length ? picks.map(c => `${c.c} ${pctTxt(c.ret30)}`).join(' · ') : a.rankerNone, tag: picks.length ? 'RANK' : 'IDLE', k: 'purple' });
-    A.push({ ic: '⚖️', name: a.sizer, sub: fill(a.sizerEq, { n: b.pick }), tag: 'SIZE', k: 'blue' });
-    A.push({ ic: '🛡️', name: a.stop, sub: fill(a.stopSub, { s: pctTxt(b.stop), a: (v.holdings || []).length, n: v.trades.filter(x => x.why === 'stop').length }), tag: 'ARMED', k: 'red' });
-  } else if (b.id === 'longterm') {
-    A.push({ ic: '🌳', name: a.holder, sub: 'BTC 70% · ETH 30%', tag: 'HOLD', k: 'green' });
-    A.push({ ic: '⚖️', name: a.rebal, sub: a.rebalSub, tag: 'MONTHLY', k: 'blue' });
-  } else {
-    for (const c of e.coins) {
-      const good = b.id === 'steps' ? c.score >= 2 : c.trend;
-      A.push({ ic: c.c === 'BTC' ? '₿' : 'Ξ', name: `${a.trend} ${c.c}`, sub: b.id === 'steps' ? fill(a.stepsSub, { s: c.score }) : `${money(c.p)} · ${a.avg} ${money(c.avg200)}`, tag: b.id === 'steps' ? `${c.score}/3` : c.trend ? 'PASS' : 'BLOCK', k: good ? 'green' : 'red' });
-    }
-    A.push({ ic: '⚖️', name: a.sizer, sub: b.id === 'steps' ? a.sizerSteps : 'BTC 60% · ETH 40%', tag: 'SIZE', k: 'blue' });
-  }
-  A.push({ ic: '📓', name: a.journal, sub: fill(a.journalSub, { n: v.trades.length }), tag: 'WRITE', k: 'grey' });
-  A.push({ ic: '😴', name: a.you, sub: fill(a.youSub, { t: when(v.nextAt) }), tag: 'ASLEEP', k: 'grey', you: true });
-  return A;
+    }).join('')}${S.manual ? `<li><button class="card wallet" data-act="manual" data-k="open-manual"><span class="av" style="--h:200" aria-hidden="true">🧑</span>
+        <span class="wl-main"><span class="wl-name">${t.desk.you}</span><span class="muted">${t.desk.youLine}</span></span>
+        <span class="wl-val"><span class="wl-money">${money(mv)}</span>${chg(mv / S.manual.start - 1)}</span></button></li>` : ''}</ul>
+    <div class="actions"><button class="btn ghost" data-act="tab" data-v="bots" data-k="add-bot">+ ${t.addBot}</button>
+    ${S.manual ? '' : `<button class="btn ghost" data-act="manual" data-k="go-manual">🧑 ${t.desk.you}</button>`}</div>`;
 }
 
 function countdown(ms) {
@@ -225,6 +128,283 @@ function countdown(ms) {
   return (dd ? dd + 'd ' : '') + (dd || h ? h + 'h ' : '') + m + 'm';
 }
 setInterval(() => { for (const el of document.querySelectorAll('[data-until]')) el.textContent = countdown(+el.dataset.until); }, 30e3);
+
+// ---------- the desk: chart · analysis + trades · agents chat ----------
+const FEE = 0.001;
+const BLOB = {
+  vela: ['#F4F5F7', 'M20 3c9 0 16 7 16 16s-6 18-16 18S4 28 4 19 11 3 20 3z'],
+  scanner: ['#19C9A5', 'M20 2l15 9v18l-15 9-15-9V11z'],
+  analyst: ['#FF4747', 'M20 3l17 17-17 17L3 20z'],
+  sizer: ['#9AA3B5', 'M8 4h24a4 4 0 0 1 4 4v24a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V8a4 4 0 0 1 4-4z'],
+  fills: ['#9B7CFF', 'M12 6h16a8 8 0 0 1 8 8v12a8 8 0 0 1-8 8H12a8 8 0 0 1-8-8V14a8 8 0 0 1 8-8z'],
+  risk: ['#FF7A1A', 'M20 4c9.4 0 15 6.6 15 15.5S29.4 36 20 36 5 28.4 5 19.5 10.6 4 20 4z'],
+  market: ['#FF5FA8', 'M20 3c6 7 14 13 14 21a14 14 0 0 1-28 0C6 16 14 10 20 3z'],
+};
+const blob = k => { const [c, d] = BLOB[k]; return `<svg class="blob" viewBox="0 0 40 40" aria-hidden="true"><path d="${d}" fill="${c}"/>
+  <ellipse cx="15" cy="20" rx="3.4" ry="4.2" fill="#fff"/><ellipse cx="25" cy="20" rx="3.4" ry="4.2" fill="#fff"/>
+  <circle cx="15.8" cy="21" r="1.9" fill="#0B0D12"/><circle cx="25.8" cy="21" r="1.9" fill="#0B0D12"/></svg>`; };
+const price = p => money(p < 1 ? +p.toPrecision(4) : p < 100 ? +p.toFixed(3) : p);
+const qty = q => new Intl.NumberFormat(loc(), { maximumSignificantDigits: 5 }).format(q);
+const signed = v => (v >= 0 ? '+' : '−') + money(Math.abs(v));
+
+// Your own practice wallet (you trade by hand, next to the bots).
+function manual() { return S.manual; }
+function ensureManual() { if (!S.manual) { S.manual = { cash: 1000, start: 1000, fills: [], created: Date.now() }; store.set('manual', S.manual); } return S.manual; }
+function manualBook(m) {
+  const pos = {};
+  for (const f of m.fills) { const p = pos[f.c] || (pos[f.c] = { q: 0, cost: 0 }); if (f.side === 'buy') { p.q += f.q; p.cost += f.usd; } else { const sh = p.q ? f.q / p.q : 1; p.cost -= p.cost * sh; p.q -= f.q; if (p.q < 1e-12) { p.q = 0; p.cost = 0; } } }
+  return pos;
+}
+const livePx = c => S.tick[c]?.p ?? S.mk?.live?.[c] ?? null;
+function manualValue(m) { const pos = manualBook(m); let v = m.cash; for (const c in pos) v += pos[c].q * (livePx(c) || 0); return v; }
+
+function deskState(id, firstCoin) {
+  if (S.desk.id !== id) S.desk = { id, coin: firstCoin, tf: '1M', pane: 0, seen: false };
+  return S.desk;
+}
+
+function deskScreen(id) {
+  const t = T(), dk = t.desk;
+  if (!S.mk) return statusBox();
+  const isManual = id === 'manual';
+  const w = isManual ? null : S.wallets.find(x => x.id === id);
+  if (!isManual && !w) { S.view = null; return practice(); }
+  const m = isManual ? ensureManual() : null;
+  const v = isManual ? null : walletView(w);
+  const b = isManual ? botById('momentum') : v.bot;
+  const e = cached(`e|${b.id}|${S.mk.at}`, () => explain(b, S.mk.d));
+  const first = v?.holdings?.[0]?.c || e.coins.find(c => c.w)?.c || e.coins[0].c;
+  const st = deskState(id, first);
+  const coins = e.coins.map(c => c.c);
+  if (!coins.includes(st.coin) && !S.mk.d.px[st.coin]) st.coin = first;
+
+  const head = isManual
+    ? `<header class="panel t-head"><div class="t-top"><span class="av" style="--h:200" aria-hidden="true">🧑</span><div class="t-id"><p class="t-name">${dk.you}</p><p class="run mono">${dk.youLine}</p></div>
+        <span class="paper mono">${t.term.paper}</span></div>
+        <div class="t-nums"><div><p class="lbl mono">${t.term.balance}</p><p class="t-big mono" data-manual-val>${money(manualValue(m))}</p><p>${chg(manualValue(m) / m.start - 1)}</p></div>
+        <div class="t-wl mono"><p><b>${m.fills.length}</b> ${t.term.trades}</p></div></div></header>`
+    : `<header class="panel t-head"><div class="t-top">${avatar(b)}<div class="t-id"><p class="t-name">VELA <span class="hl">DESK</span> <span class="ver">· ${esc(botName(b))}</span></p>
+        <p class="run mono"><i class="dot${v.pending ? ' wait' : ''}" aria-hidden="true"></i>${v.pending ? t.term.waitingFirst : t.term.running} · ${t.term.nextIn} <b data-until="${v.nextAt}">${countdown(v.nextAt)}</b></p></div>
+        <span class="paper mono">${t.term.paper}</span></div>
+        <div class="t-nums"><div><p class="lbl mono">${t.term.balance}</p><p class="t-big mono">${money(v.value)}</p><p>${chg(v.value / w.cash - 1)}</p></div>
+        <div class="t-wl mono"><p><b>${v.trades.length}</b> ${t.term.trades}</p></div></div></header>`;
+
+  const seg = `<div class="seg" role="tablist" aria-label="${dk.panes.join(', ')}">${dk.panes.map((p, k) =>
+    `<button role="tab" data-act="pane" data-v="${k}" data-k="pane-${k}" aria-selected="${st.pane === k}">${p}</button>`).join('')}</div>`;
+
+  return `<button class="back" data-act="back" data-k="back"><span aria-hidden="true">‹</span> ${t.back}</button>${head}${seg}
+    <div class="desk" data-active="${st.pane}">
+      <section class="pane" data-pane="0" aria-label="${dk.panes[0]}">${chartPane(st, b, v, m, coins)}</section>
+      <section class="pane" data-pane="1" aria-label="${dk.panes[1]}">${analysisPane(st, b, e, v, w, m)}</section>
+      <section class="pane" data-pane="2" aria-label="${dk.panes[2]}">${chatPane(b, v, w, m)}</section>
+    </div>
+    ${isManual ? '' : `<button class="btn danger wide" data-act="remove" data-v="${w.id}" data-k="remove">${t.stopBot}</button>`}`;
+}
+
+function chartPane(st, b, v, m, coins) {
+  const dk = T().desk, c = st.coin, tk = S.tick[c], p = livePx(c);
+  const botHold = v?.holdings?.find(h => h.c === c);
+  const mine = manualBook(m || S.manual || { fills: [] })[c];
+  const key = `${c}|${st.tf}`;
+  return `<div class="cc-head"><span class="coin-av" aria-hidden="true">${c.slice(0, 1)}</span>
+      <div class="cc-name"><b>$${c}</b><span>${COIN[c] || c}</span></div>
+      <div class="cc-px"><b class="mono" data-live-p>${p ? price(p) : '—'}</b><span data-live-c>${tk ? chg(tk.chg) : ''}</span></div></div>
+    <div class="coin-pick" role="group" aria-label="${T().ag.radar}">${coins.map(x => `<button class="cp${x === c ? ' on' : ''}" data-act="coin" data-v="${x}" data-k="coin-${x}" aria-pressed="${x === c}">${x}</button>`).join('')}</div>
+    <div class="candles" data-candles>${S.cnd.key === key && S.cnd.rows ? drawCandles(S.cnd.rows, st, v) : `<p class="muted mono cc-load">${S.cnd.err === key ? dk.chartError : dk.loadingChart}</p>`}</div>
+    <div class="tf" role="group" aria-label="Timeframe"><span class="livedot mono"><i class="dot" aria-hidden="true"></i>${dk.live}</span>${Object.keys(TF).map(k =>
+      `<button data-act="tf" data-v="${k}" data-k="tf-${k}" aria-pressed="${st.tf === k}">${k}</button>`).join('')}</div>
+    <div class="ypos">
+      <div><p class="lbl mono">◆ ${dk.botPos}</p>${botHold ? `<p class="yp-v"><b>${money(botHold.value)}</b><span class="${botHold.gain >= 0 ? 'up-t' : 'down-t'} mono">${signed(botHold.value - botHold.value / (1 + botHold.gain))}<br>${pctTxt(botHold.gain)}</span></p>` : `<p class="muted small">${fill(dk.noBotPos, { c })}</p>`}</div>
+      <div><p class="lbl mono">◇ ${dk.yourPos}</p>${mine && mine.q > 0 && p ? `<p class="yp-v"><b>${money(mine.q * p)}</b><span class="${mine.q * p >= mine.cost ? 'up-t' : 'down-t'} mono">${signed(mine.q * p - mine.cost)}<br>${qty(mine.q)} ${c}</span></p>` : `<p class="muted small">${fill(dk.noYourPos, { c })}</p>`}</div>
+    </div>
+    <dl class="stats24 mono" data-live-hilo>${hilo(tk)}</dl>
+    <p class="warn"><span aria-hidden="true">⚠</span> ${dk.warn}</p>
+    <div class="bs"><button class="b-sell" data-act="trade" data-v="sell" data-k="t-sell">${dk.sell}</button><button class="b-buy" data-act="trade" data-v="buy" data-k="t-buy">${dk.buy}</button></div>`;
+}
+const hilo = tk => { const dk = T().desk; return tk ? `<div><dt>${dk.hi}</dt><dd>${price(tk.hi)}</dd></div><div><dt>${dk.lo}</dt><dd>${price(tk.lo)}</dd></div><div><dt>${dk.vol}</dt><dd>$${new Intl.NumberFormat(loc(), { notation: 'compact', maximumFractionDigits: 1 }).format(tk.vol)}</dd></div>` : ''; };
+
+function drawCandles(rows, st, v) {
+  const W = 340, H = 190, P = 6, lo = Math.min(...rows.map(r => r.l)), hi = Math.max(...rows.map(r => r.h)), span = hi - lo || 1;
+  const n = rows.length, bw = W / n, y = p => P + (1 - (p - lo) / span) * (H - 2 * P);
+  const last = rows[n - 1].c, ms = rows.length > 1 ? rows[1].t - rows[0].t : DAY;
+  const marks = [];
+  const add = (ts, p, side) => { const k = Math.floor((ts - rows[0].t) / ms); if (k >= 0 && k < n) marks.push({ x: k * bw + bw / 2, y: y(Math.min(hi, Math.max(lo, p))), side }); };
+  if (v) for (const x of v.trades) if (x.c === st.coin) add((x.day + 1) * DAY - 1, x.p, x.side);
+  if (S.manual) for (const f of S.manual.fills) if (f.c === st.coin) add(f.ts, f.p, f.side);
+  return `<svg viewBox="0 0 ${W} ${H}" class="cndl" role="img" aria-label="${esc(`$${st.coin} ${st.tf}: ${price(rows[0].o)} → ${price(last)}`)}">
+    ${rows.map((r, k) => { const x = k * bw, up = r.c >= r.o, top = y(Math.max(r.o, r.c)), h = Math.max(1, Math.abs(y(r.o) - y(r.c)));
+      return `<g class="${up ? 'cu' : 'cd'}"><line x1="${(x + bw / 2).toFixed(1)}" x2="${(x + bw / 2).toFixed(1)}" y1="${y(r.h).toFixed(1)}" y2="${y(r.l).toFixed(1)}"/><rect x="${(x + bw * 0.15).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(1, bw * 0.7).toFixed(1)}" height="${h.toFixed(1)}"/></g>`; }).join('')}
+    <line class="lastline" x1="0" x2="${W}" y1="${y(last).toFixed(1)}" y2="${y(last).toFixed(1)}"/>
+    ${marks.map(k => `<g class="mk ${k.side}"><circle cx="${k.x.toFixed(1)}" cy="${k.y.toFixed(1)}" r="6"/><text x="${k.x.toFixed(1)}" y="${(k.y + 3.5).toFixed(1)}" text-anchor="middle">${k.side === 'buy' ? 'B' : 'S'}</text></g>`).join('')}
+  </svg><span class="lastlbl mono" style="top:${(y(last) / H * 100).toFixed(1)}%">${price(last)}</span>`;
+}
+
+function analysisPane(st, b, e, v, w, m) {
+  const t = T(), dk = t.desk, c = e.coins.find(x => x.c === st.coin);
+  const row = (label, val, ok) => `<li><span>${label}</span><b class="mono ${ok == null ? '' : ok ? 'pass' : 'fail'}">${val}</b></li>`;
+  let checks = '';
+  if (c) {
+    const held = v?.holdings?.some(h => h.c === c.c);
+    const verdict = held ? 'held' : c.w ? 'pick' : c.trend && (!b.pick || e.btcUp) ? 'watch' : 'skip';
+    checks = `<ul class="checks">
+      ${b.pick ? row(dk.chkBtc, e.btcUp ? 'PASS' : 'FAIL', e.btcUp) : ''}
+      ${c.up200 == null ? '' : row(dk.chk200, c.up200 ? 'PASS' : 'FAIL', c.up200)}
+      ${b.pick && c.up2050 != null ? row(dk.chk2050, c.up2050 ? 'PASS' : 'FAIL', c.up2050) : ''}
+      ${b.id === 'steps' ? row(dk.chkSignals, `${c.score}/3`, c.score >= 2) : ''}
+      ${row(dk.chkMom, c.ret30 == null ? '—' : `${pctTxt(c.ret30)} · #${c.rank}`, c.ret30 == null ? null : c.ret30 > 0)}
+      ${b.pick ? row(fill(dk.chkTop, { n: b.pick }), c.w ? 'PASS' : 'FAIL', !!c.w) : ''}
+      ${b.stop ? row(dk.chkStop, `${pctTxt(b.stop)} · ${price(c.p * (1 + b.stop))}`, null) : ''}
+    </ul><p class="verdict mono v-${verdict}">${dk.verdict[verdict]}</p>`;
+  } else checks = `<p class="muted small">—</p>`;
+  const anaHead = `<h3 class="t-h mono">$${st.coin} · ${dk.analysis} <span class="muted">· ${fill(dk.scanned, { n: e.coins.length })}</span></h3>${m ? `<p class="lbl-xs mono">${fill(dk.view, { b: botName(b) })}</p>` : ''}`;
+
+  let desk;
+  if (m) {
+    const val = manualValue(m), rows = [...m.fills].reverse();
+    desk = `<h3 class="t-h mono">${dk.yourTrades}</h3><p class="lbl mono">${dk.bank} · ${fill(dk.startedWith, { usd: money(m.start) })}</p>
+      <p class="bank mono ${val >= m.start ? 'up-t' : 'down-t'}">${money(val)}</p>
+      ${rows.length ? `<ol class="dtrades mono">${rows.map((f, k) => `<li><span class="dn">#${rows.length - k}</span><span>${f.side === 'buy' ? dk.buy : dk.sell} <b>$${f.c}</b><br><span class="muted">${qty(f.q)} @ ${price(f.p)}</span></span><span class="r">${money(f.usd)}<br><span class="muted">${new Date(f.ts).toLocaleString(loc(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></span></li>`).join('')}</ol>` : `<p class="muted small">${dk.noDeskTrades}</p>`}`;
+  } else {
+    const ts = tradeStats(v.trades), d = S.mk.d;
+    const openRows = ts.open.map(o => { const h = v.holdings.find(x => x.c === o.c), now = h ? h.now : o.entry; return { c: o.c, entry: o.entry, exit: now, pnl: o.q * now - o.cost, days: o.since != null ? d.dates[d.dates.length - 1] - o.since : 0, open: true }; });
+    const closed = ts.sells.map(s => ({ c: s.c, entry: s.entry, exit: s.p, pnl: s.pnl, days: s.since != null ? s.day - s.since : 0, open: false }));
+    const all = [...openRows, ...closed.reverse()];
+    desk = `<h3 class="t-h mono">${dk.deskT}</h3><p class="lbl mono">${dk.bank} · ${fill(dk.startedWith, { usd: money(w.cash) })}</p>
+      <p class="bank mono ${v.value >= w.cash ? 'up-t' : 'down-t'}">${money(v.value)}</p>
+      <p class="lbl-xs mono">${fill(dk.tradesLine, { n: v.trades.length, g: ts.wins, r: ts.losses, w: ts.worst ? signed(ts.worst.pnl) : '—' })}</p>
+      ${v.eq.length > 2 ? chart([{ v: v.eq, cls: 'main' }], `${money(w.cash)} → ${money(v.value)}`, 70) : ''}
+      ${all.length ? `<ol class="dtrades mono">${all.map((x, k) => `<li><span class="dn">#${all.length - k}</span>
+        <span><b>$${x.c}</b> ${price(x.entry)} → ${price(x.exit)}<br><span class="muted">${fill(dk.inDays, { n: x.days })} · <span class="${x.open ? 'st-open' : ''}">${x.open ? dk.open : dk.closed}</span></span></span>
+        <span class="r ${x.pnl >= 0 ? 'up-t' : 'down-t'}">${signed(x.pnl)}</span></li>`).join('')}</ol>` : `<p class="muted small">${dk.noDeskTrades}</p>`}`;
+  }
+  return `<div class="ana">${anaHead}${checks}</div><div class="dsk">${desk}</div>`;
+}
+
+function chatMessages(b, v, w, m) {
+  const ch = T().chat, msgs = [], say = (who, text) => msgs.push({ who, text });
+  if (m) {
+    if (!m.fills.length) say('vela', ch.youEmpty);
+    let lastDay = null;
+    for (const f of [...m.fills].reverse()) {
+      const day = Math.floor(f.ts / DAY);
+      if (day !== lastDay) { msgs.push({ sep: day }); lastDay = day; }
+      say('fills', fill(f.side === 'buy' ? ch.youBuy : ch.youSell, { q: qty(f.q), c: f.c, p: price(f.p) }));
+    }
+    return msgs;
+  }
+  if (v.pending) { say('vela', fill(ch.waitFirst, { usd: money(w.cash), t: when(v.nextAt) })); return msgs; }
+  const d = S.mk.d, rows = tradeStats(v.trades).rows, checks = v.checks.slice(-8);
+  const from = checks.length ? checks[0].day : Infinity;
+  const byDay = new Map();
+  for (const x of rows) if (x.day >= from) (byDay.get(x.day) || byDay.set(x.day, []).get(x.day)).push(x);
+  const ck = new Map(checks.map(c => [c.day, c]));
+  const days = [...new Set([...ck.keys(), ...byDay.keys()])].sort((a, z) => a - z);
+  const groups = [];
+  let prevPicks = null;
+  for (const day of days) {
+    const g = [{ sep: day }], put = (who, text) => g.push({ who, text });
+    const c = ck.get(day), tr = byDay.get(day) || [];
+    const quiet = c && !tr.length && prevPicks !== null && prevPicks === c.picks.join();
+    if (c) {
+      const e = cached(`e|${b.id}|${S.mk.at}|${c.i}`, () => explain(b, d, c.i));
+      put('scanner', fill(ch.scan, { n: e.coins.length, a: e.coins.filter(x => x.trend).length }));
+      if (!quiet) {
+        if (b.pick) put('market', fill(e.btcUp ? ch.btcUp : ch.btcDown, { d: pctTxt(e.btc / e.btcAvg - 1) }));
+        const top = e.coins.filter(x => x.w > 0)[0];
+        put('analyst', top && top.ret30 != null ? fill(ch.lead, { c: top.c, r: pctTxt(top.ret30) }) : ch.nothing);
+      }
+      prevPicks = c.picks.join();
+    }
+    for (const x of tr.filter(x => x.side === 'sell')) {
+      if (x.why === 'stop') put('risk', fill(ch.stopHit, { s: pctTxt(b.stop), c: x.c }));
+      else put('analyst', fill(ch.why, { c: x.c, why: T().why[x.why] || '' }));
+      put('vela', fill(ch.sell, { c: x.c }));
+      put('fills', fill(ch.closed, { pnl: signed(x.pnl), c: x.c }));
+    }
+    for (const x of tr.filter(x => x.side === 'buy')) {
+      put('vela', fill(ch.buy, { c: x.c }));
+      put('sizer', fill(ch.size, { usd: money(x.usd), c: x.c }));
+      put('fills', fill(ch.filled, { p: price(x.p), fee: money(x.usd * FEE) }));
+      if (b.stop) put('risk', fill(ch.armed, { s: pctTxt(b.stop), p: price(x.p * (1 + b.stop)) }));
+    }
+    if (c && !tr.length) put('vela', c.picks.length ? ch.hold : ch.cash);
+    groups.push(g);
+  }
+  return groups.reverse().flat().slice(0, 70); // newest day first
+}
+
+function chatPane(b, v, w, m) {
+  const t = T(), names = t.chat.names, msgs = chatMessages(b, v, w, m);
+  const animate = !S.desk.seen; S.desk.seen = true;
+  const nAnim = Math.min(6, msgs.length);
+  return `<h3 class="t-h mono">${t.desk.agentsT} <span class="muted">· ${t.desk.live}</span><i class="dot" aria-hidden="true"></i></h3>
+    <ol class="chat" aria-live="off">${msgs.map((x, k) => x.sep != null
+      ? `<li class="sep mono">${dayDate(x.sep, { weekday: 'short', day: 'numeric', month: 'short' })}</li>`
+      : `<li class="msg${animate && k <= nAnim ? ' pop' : ''}" style="--i:${k}">${blob(x.who)}<div><b>${names[x.who]}</b><p>${esc(x.text)}</p></div></li>`).join('')}</ol>`;
+}
+
+function tradeDialog() {
+  const tr = S.trade;
+  if (!tr) return '';
+  const dk = T().desk, tt = dk.trade, p = livePx(tr.coin), m = ensureManual(), pos = manualBook(m)[tr.coin];
+  const base = tr.side === 'buy' ? m.cash : (pos ? pos.q * p : 0), amt = +tr.amt || 0;
+  return `<form method="dialog" class="sheet tsheet">
+    <div class="ts-top"><span class="coin-av" aria-hidden="true">${tr.coin[0]}</span><div><h2 id="trade-title">${tt.title[tr.side]} $${tr.coin}</h2><p class="muted mono">${p ? price(p) : '—'}</p></div>
+      <button class="x" data-act="tclose" data-k="tclose" aria-label="${tt.close}">✕</button></div>
+    <p class="ts-amt mono" aria-live="polite">${money(amt)}</p>
+    <p class="muted mono ts-q">≈ ${p ? qty(amt / p) : 0} ${tr.coin}</p>
+    <div class="pct">${[10, 25, 50, 100].map(k => `<button data-act="tpct" data-v="${k}" data-k="tpct-${k}">${k === 100 ? 'Max' : k + '%'}</button>`).join('')}</div>
+    <div class="pad">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'del'].map(k => `<button data-act="tkey" data-v="${k}" data-k="tkey-${k}" ${k === 'del' ? 'aria-label="⌫"' : ''}>${k === 'del' ? '⌫' : k}</button>`).join('')}</div>
+    <div class="ts-foot mono"><span>${tr.side === 'buy' ? fill(tt.avail, { usd: money(base) }) : fill(tt.have, { usd: money(base) })}</span><span>${tt.fee}</span></div>
+    ${tr.msg ? `<p class="ts-msg" role="alert">${tr.msg}</p>` : ''}
+    <label class="slide ${tr.side}"><input type="range" min="0" max="100" value="0" data-slide aria-label="${tt.slide[tr.side]}"><span>${tt.slide[tr.side]}</span></label>
+  </form>`;
+}
+
+function doTrade() {
+  const tr = S.trade, tt = T().desk.trade, m = ensureManual(), p = livePx(tr.coin), amt = +tr.amt || 0;
+  const pos = manualBook(m)[tr.coin], base = tr.side === 'buy' ? m.cash : (pos ? pos.q * p : 0);
+  if (!amt || !p) { tr.msg = tt.zero; return false; }
+  if (amt > base + 1e-6) { tr.msg = tt.tooMuch; return false; }
+  let q;
+  if (tr.side === 'buy') { q = amt * (1 - FEE) / p; m.cash -= amt; m.fills.push({ c: tr.coin, side: 'buy', q, p, usd: amt, ts: Date.now() }); }
+  else { q = Math.min(pos.q, amt / p); if (pos.q - q < 1e-9 || amt >= base - 1e-6) q = pos.q; const usd = q * p * (1 - FEE); m.cash += usd; m.fills.push({ c: tr.coin, side: 'sell', q, p, usd, ts: Date.now() }); }
+  store.set('manual', m);
+  announce(fill(tt.done[tr.side], { q: qty(q), c: tr.coin, p: price(p) }));
+  S.trade = null; memo.clear();
+  return true;
+}
+
+// Live chart + price while the desk is open.
+async function loadCandles() {
+  const st = S.desk; if (!S.view || !st.coin) return;
+  const key = `${st.coin}|${st.tf}`;
+  try {
+    const rows = await candles(st.coin, st.tf);
+    S.cnd = { key, rows };
+  } catch { S.cnd = { key: null, rows: null, err: key }; }
+  paintChart();
+}
+function paintChart() {
+  const el = document.querySelector('[data-candles]'), st = S.desk;
+  if (!el) return;
+  const key = `${st.coin}|${st.tf}`;
+  const w = S.wallets.find(x => x.id === S.view);
+  el.innerHTML = S.cnd.key === key && S.cnd.rows ? drawCandles(S.cnd.rows, st, w ? walletView(w) : null) : `<p class="muted mono cc-load">${S.cnd.err === key ? T().desk.chartError : T().desk.loadingChart}</p>`;
+}
+async function pollTick() {
+  const c = S.desk.coin; if (!S.view || !c || document.hidden) return;
+  try {
+    S.tick[c] = await ticker(c);
+    const tk = S.tick[c], p = document.querySelector('[data-live-p]'), ch = document.querySelector('[data-live-c]'), hl = document.querySelector('[data-live-hilo]');
+    if (p) p.textContent = price(tk.p);
+    if (ch) ch.innerHTML = chg(tk.chg);
+    if (hl) hl.innerHTML = hilo(tk);
+    const mv = document.querySelector('[data-manual-val]'); if (mv && S.manual) mv.textContent = money(manualValue(S.manual));
+  } catch { }
+}
+setInterval(pollTick, 10e3);
+setInterval(() => { if (S.view) loadCandles(); }, 60e3);
 
 function botsScreen() {
   const t = T();
@@ -346,13 +526,20 @@ function render(focusTop) {
   } else {
     $('#tabs').hidden = false;
     const title = S.view ? '' : `<header class="top"><p class="brand"><span aria-hidden="true">⛵</span> Vela</p><h1 tabindex="-1">${t.titles[S.tab]}</h1></header>`;
-    const body = S.view ? walletDetail(S.view) : { practice, bots: botsScreen, test: testScreen, settings: settingsScreen }[S.tab]();
+    const body = S.view ? deskScreen(S.view) : { practice, bots: botsScreen, test: testScreen, settings: settingsScreen }[S.tab]();
     $('#app').innerHTML = title + `<div class="content">${body}</div>`;
+    $('#app').classList.toggle('wide', !!S.view);
     $('#tabs').innerHTML = ['practice', 'bots', 'test', 'settings'].map(id =>
       `<button data-act="tab" data-v="${id}" data-k="tab-${id}" ${S.tab === id ? 'aria-current="page"' : ''}>${ICON[id]}<span>${t.tabs[id]}</span></button>`).join('');
   }
-  const setup = $('#setup'), conf = $('#confirm');
-  setup.innerHTML = setupDialog(); conf.innerHTML = confirmDialog();
+  const setup = $('#setup'), conf = $('#confirm'), trd = $('#trade');
+  setup.innerHTML = setupDialog(); conf.innerHTML = confirmDialog(); trd.innerHTML = tradeDialog();
+  if (S.trade && !trd.open) trd.showModal();
+  if (!S.trade && trd.open) trd.close();
+  if (S.view && S.mk && S.desk.coin) {
+    const key = `${S.desk.coin}|${S.desk.tf}`;
+    if (S.cndReq !== key) { S.cndReq = key; loadCandles(); pollTick(); }
+  } else S.cndReq = null;
   if (S.setup.bot && !setup.open) setup.showModal();
   if (!S.setup.bot && setup.open) setup.close();
   if (S.confirm && !conf.open) conf.showModal();
@@ -385,6 +572,24 @@ const ACT = {
     S.wallets.push(w); saveWallets();
     S.setup.bot = null; S.tab = 'practice'; S.view = w.id; render(true); scrollTo(0, 0);
   },
+  pane(v) { S.desk.pane = +v; render(); },
+  coin(v) { S.desk.coin = v; render(); },
+  tf(v) { S.desk.tf = v; render(); },
+  trade(v) { ensureManual(); S.trade = { side: v, coin: S.desk.coin, amt: '0' }; render(); },
+  tclose() { S.trade = null; render(); },
+  tpct(v) {
+    const tr = S.trade, m = ensureManual(), p = livePx(tr.coin), pos = manualBook(m)[tr.coin];
+    const base = tr.side === 'buy' ? m.cash : (pos && p ? pos.q * p : 0);
+    tr.amt = String(Math.floor(base * +v / 100 * 100) / 100); tr.msg = ''; render();
+  },
+  tkey(k) {
+    const tr = S.trade; let a = tr.amt === '0' ? '' : tr.amt;
+    if (k === 'del') a = a.slice(0, -1);
+    else if (k === '.') { if (!a.includes('.')) a = (a || '0') + '.'; }
+    else if (!/\.\d\d$/.test(a) && a.length < 9) a += k;
+    tr.amt = a || '0'; tr.msg = ''; render();
+  },
+  manual() { ensureManual(); S.view = 'manual'; render(true); scrollTo(0, 0); },
   testbot(v) { S.test.bot = v; S.tab = 'test'; S.view = null; render(true); scrollTo(0, 0); },
   tbot(v) { S.test.bot = v; render(); },
   tper(v) { S.test.period = +v; render(); },
@@ -394,7 +599,7 @@ const ACT = {
   onboarded() { S.set.onboarded = true; saveSet(); render(true); },
   refresh(v) { refresh(!!v); },
   remove(v) { S.confirm = { text: T().stopConfirm, run: () => { S.wallets = S.wallets.filter(w => w.id !== v); saveWallets(); S.view = null; } }; render(); },
-  reset() { S.confirm = { text: T().resetConfirm, yes: T().reset, run: () => { S.wallets = []; saveWallets(); } }; render(); },
+  reset() { S.confirm = { text: T().resetConfirm, yes: T().reset, run: () => { S.wallets = []; saveWallets(); S.manual = null; store.set('manual', null); } }; render(); },
   'confirm-yes'() { const c = S.confirm; S.confirm = null; c?.run(); render(true); },
 };
 
@@ -405,6 +610,13 @@ document.addEventListener('click', e => {
   ACT[el.dataset.act]?.(el.dataset.v);
 });
 for (const id of ['#setup', '#confirm']) $(id).addEventListener('cancel', e => { e.preventDefault(); ACT.close(); });
+$('#trade').addEventListener('cancel', e => { e.preventDefault(); ACT.tclose(); });
+document.addEventListener('input', e => {
+  if (!e.target.matches('[data-slide]') || +e.target.value < 96) return;
+  e.target.value = 0;
+  doTrade(); render();
+});
+document.addEventListener('change', e => { if (e.target.matches('[data-slide]')) e.target.value = 0; });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.mk && Date.now() - S.mk.at > 5 * 60e3) refresh();
 });

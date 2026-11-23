@@ -75,3 +75,22 @@ export async function loadMarket() {
   });
   return { d: makeData(dates, series), live, stale, at: Date.now() };
 }
+
+// Live candles for the chart (open, high, low, close). Not saved: always fresh.
+async function get(path) {
+  let err;
+  for (const h of HOSTS) {
+    try { const r = await fetch(h + path); if (r.ok) return await r.json(); err = new Error('HTTP ' + r.status); } catch (e) { err = e; }
+  }
+  throw err;
+}
+export const TF = { '1D': ['15m', 96], '1W': ['1h', 168], '1M': ['4h', 180], '1Y': ['1d', 365] };
+export async function candles(coin, tf) {
+  const [interval, limit] = TF[tf];
+  const rows = await get(`/api/v3/klines?symbol=${coin}USDT&interval=${interval}&limit=${limit}`);
+  return rows.map(r => ({ t: r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[7] }));
+}
+export async function ticker(coin) {
+  const r = await get(`/api/v3/ticker/24hr?symbol=${coin}USDT`);
+  return { p: +r.lastPrice, chg: +r.priceChangePercent / 100, vol: +r.quoteVolume, hi: +r.highPrice, lo: +r.lowPrice };
+}

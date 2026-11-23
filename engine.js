@@ -85,7 +85,7 @@ export const botById = id => BOTS.find(b => b.id === id);
 
 // Replays a bot day by day. Returns the trades, the daily value and what it holds at the end.
 export function simulate(bot, d, { start = 0, end = d.dates.length - 1, cash = 1000 } = {}) {
-  const pos = {}, trades = [], eq = [];
+  const pos = {}, trades = [], eq = [], checks = [];
   const px = (c, i) => d.px[c][i];
   const value = i => { let v = cash; for (const c in pos) v += pos[c].q * px(c, i); return v; };
   const log = (i, c, side, usd, p, why, q) => trades.push({ day: d.dates[i], c, side, usd, p, why, q });
@@ -115,6 +115,7 @@ export function simulate(bot, d, { start = 0, end = d.dates.length - 1, cash = 1
 
     if ((i - start) % bot.every === 0) {
       const t = bot.target(ctxAt(d, i)), E = value(i);
+      checks.push({ i, day: d.dates[i], picks: Object.keys(t.w), out: t.out });
       for (const c of Object.keys(pos)) {
         const tw = t.w[c] || 0, cw = pos[c].q * px(c, i) / E;
         if (!tw) sell(c, pos[c].q, i, t.out);
@@ -131,7 +132,7 @@ export function simulate(bot, d, { start = 0, end = d.dates.length - 1, cash = 1
     }
     eq.push(value(i));
   }
-  return { trades, eq, pos, cash, start, end };
+  return { trades, eq, pos, cash, start, end, checks };
 }
 
 // "Just buy Bitcoin and wait" — the yardstick every bot is compared with.
@@ -170,7 +171,7 @@ export function runWallet(w, d, live = {}) {
   const start = d.dates.findIndex(day => day >= w.startDay);
   if (start < 0) {
     const next = (w.startDay + 1) * DAY;
-    return { bot, pending: true, value: w.cash, cash: w.cash, pos: {}, trades: [], eq: [w.cash], nextAt: next, start: null };
+    return { bot, pending: true, value: w.cash, cash: w.cash, pos: {}, holdings: [], trades: [], checks: [], eq: [w.cash], nextAt: next, start: null };
   }
   const r = simulate(bot, d, { start, cash: w.cash });
   let value = r.cash;
@@ -183,7 +184,7 @@ export function runWallet(w, d, live = {}) {
   holdings.sort((a, b) => b.value - a.value);
   const k = Math.floor((last - start) / bot.every) + 1;
   const nextDay = d.dates[start] + k * bot.every;
-  return { bot, pending: false, value, cash: r.cash, holdings, trades: r.trades, eq: [...r.eq, value], nextAt: (nextDay + 1) * DAY, start };
+  return { bot, pending: false, value, cash: r.cash, holdings, trades: r.trades, checks: r.checks, eq: [...r.eq, value], nextAt: (nextDay + 1) * DAY, start };
 }
 
 // What the bot "sees" at a given close: market trend, every coin it watches and what it would pick.
@@ -197,12 +198,14 @@ export function explain(bot, d, i = d.dates.length - 1) {
     const trend = bot.pick ? long && x.p(c) > x.sma(c, 200) && x.sma(c, 20) > x.sma(c, 50) : long && x.p(c) > x.sma(c, 200);
     return {
       c, p: x.p(c), trend, score: signals.filter(Boolean).length,
+      up200: long ? x.p(c) > x.sma(c, 200) : null, up2050: long ? x.sma(c, 20) > x.sma(c, 50) : null,
       ret30: x.has(c, 31) ? x.ret(c, 30) : null, ret1: x.has(c, 2) ? x.ret(c, 1) : null,
       avg200: long ? x.sma(c, 200) : null, w: t.w[c] || 0,
     };
   });
+  [...coins].sort((a, b) => (b.ret30 ?? -9) - (a.ret30 ?? -9)).forEach((c, k) => (c.rank = k + 1));
   coins.sort((a, b) => (b.w - a.w) || ((b.trend - a.trend)) || ((b.ret30 ?? -9) - (a.ret30 ?? -9)));
-  return { day: d.dates[i], btcUp, btc: x.p('BTC'), btcAvg: x.has('BTC', 200) ? x.sma('BTC', 200) : null, coins, target: t.w, out: t.out };
+  return { i, day: d.dates[i], btcUp, btc: x.p('BTC'), btcAvg: x.has('BTC', 200) ? x.sma('BTC', 200) : null, coins, target: t.w, out: t.out };
 }
 
 // Closed results from a trade list: wins, losses, best and last sell (each sell vs. its average cost).
@@ -210,14 +213,15 @@ export function tradeStats(trades) {
   const book = {}, sells = [], rows = [];
   for (const t of trades) {
     const b = book[t.c] || (book[t.c] = { q: 0, cost: 0 });
-    if (t.side === 'buy') { b.q += t.q; b.cost += t.usd; rows.push(t); }
+    if (t.side === 'buy') { if (!b.q) b.since = t.day; b.q += t.q; b.cost += t.usd; rows.push(t); }
     else {
       const share = b.q ? Math.min(1, t.q / b.q) : 1, cost = b.cost * share;
-      const s = { ...t, pnl: t.usd - cost, pct: cost ? t.usd / cost - 1 : 0 };
+      const s = { ...t, pnl: t.usd - cost, pct: cost ? t.usd / cost - 1 : 0, entry: t.q ? cost / t.q : t.p, since: b.since };
       sells.push(s); rows.push(s);
       b.q -= t.q; b.cost -= cost; if (b.q <= 1e-12) { b.q = 0; b.cost = 0; }
     }
   }
   const wins = sells.filter(s => s.pnl > 0).length;
-  return { rows, sells, wins, losses: sells.length - wins, best: sells.reduce((m, s) => (!m || s.pct > m.pct ? s : m), null), last: sells[sells.length - 1] || null };
+  const open = Object.entries(book).filter(([, b]) => b.q > 0).map(([c, b]) => ({ c, q: b.q, cost: b.cost, entry: b.cost / b.q, since: b.since }));
+  return { rows, sells, open, wins, losses: sells.length - wins, worst: sells.reduce((m, s) => (!m || s.pnl < m.pnl ? s : m), null), best: sells.reduce((m, s) => (!m || s.pct > m.pct ? s : m), null), last: sells[sells.length - 1] || null };
 }
