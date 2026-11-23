@@ -242,28 +242,20 @@ function deskScreen(id) {
   const st = deskState(id, first, b.kind === 'live' ? '1D' : '1M');
   const coins = e.coins.length ? e.coins.map(c => c.c) : (b.coins || ['BTC']);
   if (!coins.includes(st.coin) && !S.mk.d.px[st.coin]) st.coin = first;
+  const name = isManual ? dk.you : botName(b), icon = isManual ? '🧑' : b.icon;
+  const next = v ? `<span class="dm-next mono" title="${t.term.nextIn}"><span class="sr">${t.term.nextIn}</span><span aria-hidden="true">⏱</span> <b data-until="${v.nextAt}">${countdown(v.nextAt)}</b></span>` : '';
 
-  const head = isManual
-    ? `<header class="panel t-head"><div class="t-top"><span class="av" style="--h:200" aria-hidden="true">🧑</span><div class="t-id"><p class="t-name">${dk.you}</p><p class="run mono">${dk.youLine}</p></div>
-        <span class="paper mono">${t.term.paper}</span></div>
-        <div class="t-nums"><div><p class="lbl mono">${t.term.balance}</p><p class="t-big mono" data-manual-val>${money(manualValue(m))}</p><p>${chg(manualValue(m) / m.start - 1)}</p></div>
-        <div class="t-wl mono"><p><b>${m.fills.length}</b> ${t.term.trades}</p></div></div></header>`
-    : `<header class="panel t-head"><div class="t-top">${avatar(b)}<div class="t-id"><p class="t-name">VELA <span class="hl">DESK</span> <span class="ver">· ${esc(botName(b))}</span></p>
-        <p class="run mono"><i class="dot${v.pending ? ' wait' : ''}" aria-hidden="true"></i>${v.pending ? t.term.waitingFirst : t.term.running} · ${v.live ? t.live.every + ' · ' : ''}${t.term.nextIn} <b data-until="${v.nextAt}">${countdown(v.nextAt)}</b></p></div>
-        <span class="paper mono">${t.term.paper}</span></div>
-        <div class="t-nums"><div><p class="lbl mono">${t.term.balance}</p><p class="t-big mono" data-wallet-val>${money(v.value)}</p><p>${chg(v.value / w.cash - 1)}</p></div>
-        <div class="t-wl mono"><p><b>${v.trades.length}</b> ${t.term.trades}</p></div></div></header>`;
-
-  const seg = `<div class="seg" role="tablist" aria-label="${dk.panes.join(', ')}">${dk.panes.map((p, k) =>
-    `<button role="tab" data-act="pane" data-v="${k}" data-k="pane-${k}" aria-selected="${st.pane === k}">${p}</button>`).join('')}</div>`;
-
-  return `<button class="back" data-act="back" data-k="back"><span aria-hidden="true">‹</span> ${t.back}</button>${head}${seg}
-    <div class="desk" data-active="${st.pane}">
+  return `<div class="dm">
+    <div class="dm-bar"><button class="dm-back" data-act="back" data-k="back" aria-label="${t.back}">‹</button>
+      <p class="dm-title"><span aria-hidden="true">${icon}</span> <b>${esc(name)}</b> <span class="dm-live mono"><i class="dot${v?.pending ? ' wait' : ''}" aria-hidden="true"></i>${dk.live}</span></p>${next}</div>
+    <div class="frame"><div class="track" data-track>
       <section class="pane" data-pane="0" aria-label="${dk.panes[0]}">${chartPane(st, b, v, m, coins)}</section>
       <section class="pane" data-pane="1" aria-label="${dk.panes[1]}">${analysisPane(st, b, e, v, w, m)}</section>
       <section class="pane" data-pane="2" aria-label="${dk.panes[2]}">${chatPane(b, v, w, m)}</section>
-    </div>
-    ${isManual ? '' : `<button class="btn danger wide" data-act="remove" data-v="${w.id}" data-k="remove">${t.stopBot}</button>`}`;
+    </div></div>
+    <div class="dots" role="tablist" aria-label="${dk.panes.join(', ')}">${dk.panes.map((p, k) =>
+      `<button role="tab" data-act="pane" data-v="${k}" data-k="pane-${k}" aria-selected="${st.pane === k}" aria-label="${p}"><i></i><span>${p}</span></button>`).join('')}</div>
+  </div>`;
 }
 
 function chartPane(st, b, v, m, coins) {
@@ -272,7 +264,7 @@ function chartPane(st, b, v, m, coins) {
   const mine = manualBook(m || S.manual || { fills: [] })[c];
   const key = `${c}|${st.tf}`;
   return `<div class="cc-head"><span class="coin-av" aria-hidden="true">${c.slice(0, 1)}</span>
-      <div class="cc-name"><b>$${c}</b><span>${COIN[c] || c}</span></div>
+      <div class="cc-name"><b>${c} <span aria-hidden="true">≡</span></b><span>${COIN[c] || c}</span></div>
       <div class="cc-px"><b class="mono" data-live-p>${p ? price(p) : '—'}</b><span data-live-c>${tk ? chg(tk.chg) : ''}</span></div></div>
     <div class="coin-pick" role="group" aria-label="${T().ag.radar}">${coins.map(x => `<button class="cp${x === c ? ' on' : ''}" data-act="coin" data-v="${x}" data-k="coin-${x}" aria-pressed="${x === c}">${x}</button>`).join('')}</div>
     <div class="candles" data-candles>${S.cnd.key === key && S.cnd.rows ? drawCandles(S.cnd.rows, st, v) : `<p class="muted mono cc-load">${S.cnd.err === key ? dk.chartError : dk.loadingChart}</p>`}</div>
@@ -322,13 +314,15 @@ function analysisPane(st, b, e, v, w, m) {
       ${b.stop ? row(dk.chkStop, `${pctTxt(b.stop)} · ${price(c.p * (1 + b.stop))}`, null) : ''}
     </ul><p class="verdict mono v-${verdict}">${dk.verdict[verdict]}</p>`;
   } else checks = `<p class="muted small">—</p>`;
-  const anaHead = `<h3 class="t-h mono">$${st.coin} · ${dk.analysis} <span class="muted">· ${fill(dk.scanned, { n: e.coins.length })}</span></h3>${m ? `<p class="lbl-xs mono">${fill(dk.view, { b: botName(b) })}</p>` : ''}`;
+  const key = `${st.coin}|${st.tf}`;
+  const mini = S.cnd.key === key && S.cnd.rows ? `<div class="mini" data-mini>${drawCandles(S.cnd.rows.slice(-90), st, v).replace('<svg ', '<svg preserveAspectRatio="none" ')}</div>` : '<div class="mini" data-mini></div>';
+  const anaHead = `<div class="ph mono"><b>${st.coin} · ${dk.analysis}</b><span class="red">${fill(dk.scanned, { n: e.coins.length }).toUpperCase()}</span></div>${mini}${m ? `<p class="lbl-xs mono">${fill(dk.view, { b: botName(b) })}</p>` : ''}`;
 
   let desk;
   if (m) {
     const val = manualValue(m), rows = [...m.fills].reverse();
-    desk = `<h3 class="t-h mono">${dk.yourTrades}</h3><p class="lbl mono">${dk.bank} · ${fill(dk.startedWith, { usd: money(m.start) })}</p>
-      <p class="bank mono ${val >= m.start ? 'up-t' : 'down-t'}">${money(val)}</p>
+    desk = `<div class="ph mono"><b>${dk.yourTrades}</b></div><p class="lbl mono">${dk.bank} · ${fill(dk.startedWith, { usd: money(m.start) })}</p>
+      <p class="bank mono ${val >= m.start ? 'up-t' : 'down-t'}" data-manual-val>${money(val)}</p>
       ${rows.length ? `<ol class="dtrades mono">${rows.map((f, k) => `<li><span class="dn">#${rows.length - k}</span><span>${f.side === 'buy' ? dk.buy : dk.sell} <b>$${f.c}</b><br><span class="muted">${qty(f.q)} @ ${price(f.p)}</span></span><span class="r">${money(f.usd)}<br><span class="muted">${new Date(f.ts).toLocaleString(loc(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></span></li>`).join('')}</ol>` : `<p class="muted small">${dk.noDeskTrades}</p>`}`;
   } else {
     const ts = tradeStats(v.trades), d = S.mk.d;
@@ -336,15 +330,16 @@ function analysisPane(st, b, e, v, w, m) {
     const openRows = ts.open.map(o => { const h = v.holdings.find(x => x.c === o.c), now = h ? h.now : o.entry; return { c: o.c, entry: o.entry, exit: now, pnl: o.q * now - o.cost, days: o.since != null ? d.dates[d.dates.length - 1] - o.since : 0, hours: o.sinceTs ? hrs(o.sinceTs, Date.now()) : null, open: true }; });
     const closed = ts.sells.map(s => ({ c: s.c, entry: s.entry, exit: s.p, pnl: s.pnl, days: s.since != null ? s.day - s.since : 0, hours: s.sinceTs ? hrs(s.sinceTs, s.ts) : null, open: false }));
     const all = [...openRows, ...closed.reverse()];
-    desk = `<h3 class="t-h mono">${dk.deskT}</h3><p class="lbl mono">${dk.bank} · ${fill(dk.startedWith, { usd: money(w.cash) })}</p>
-      <p class="bank mono ${v.value >= w.cash ? 'up-t' : 'down-t'}">${money(v.value)}</p>
+    const dayN = Math.max(1, Math.floor((Date.now() - (w.startTs ?? w.startDay * DAY)) / DAY) + 1);
+    desk = `<div class="ph mono"><b>${dk.deskT}</b><span class="red">${fill(dk.dayN, { n: dayN })}</span></div><p class="lbl mono">${dk.bank} · ${fill(dk.startedWith, { usd: money(w.cash) })}</p>
+      <p class="bank mono ${v.value >= w.cash ? 'up-t' : 'down-t'}" data-wallet-val>${money(v.value)}</p>
       <p class="lbl-xs mono">${fill(dk.tradesLine, { n: v.trades.length, g: ts.wins, r: ts.losses, w: ts.worst ? signed(ts.worst.pnl) : '—' })}</p>
-      ${v.eq.length > 2 ? chart([{ v: v.eq, cls: 'main' }], `${money(w.cash)} → ${money(v.value)}`, 70) : ''}
       ${all.length ? `<ol class="dtrades mono">${all.map((x, k) => `<li><span class="dn">#${all.length - k}</span>
         <span><b>$${x.c}</b> ${price(x.entry)} → ${price(x.exit)}<br><span class="muted">${x.hours != null ? fill(t.live.inHours, { n: x.hours }) : fill(dk.inDays, { n: x.days })} · <span class="${x.open ? 'st-open' : ''}">${x.open ? dk.open : dk.closed}</span></span></span>
         <span class="r ${x.pnl >= 0 ? 'up-t' : 'down-t'}">${signed(x.pnl)}</span></li>`).join('')}</ol>` : `<p class="muted small">${dk.noDeskTrades}</p>`}`;
   }
-  return `<div class="ana">${anaHead}${checks}</div><div class="dsk">${desk}</div>`;
+  return `<div class="ana">${anaHead}${checks}</div><div class="dsk">${desk}</div>
+    ${w ? `<button class="rm" data-act="remove" data-v="${w.id}" data-k="remove">${t.stopBot}</button>` : ''}`;
 }
 
 function chatMessages(b, v, w, m) {
@@ -440,8 +435,8 @@ function chatPane(b, v, w, m) {
   const t = T(), names = t.chat.names, msgs = chatMessages(b, v, w, m);
   const animate = !S.desk.seen; S.desk.seen = true;
   const nAnim = Math.min(6, msgs.length);
-  return `<h3 class="t-h mono">${t.desk.agentsT} <span class="muted">· ${t.desk.live}</span><i class="dot" aria-hidden="true"></i></h3>
-    <ol class="chat" aria-live="off">${msgs.map((x, k) => x.sep != null
+  if (w && !v.pending) msgs.push({ who: 'vela', text: fill(t.chat.intro, { usd: money(w.cash), s: b.stop ? pctTxt(b.stop) : '—', n: b.kind === 'live' ? 98 : b.pick ? Math.round(100 / b.pick) : 100 }) });
+  return `<ol class="chat" aria-live="off">${msgs.map((x, k) => x.sep != null
       ? `<li class="sep mono">${x.sep === 'now' ? `<span class="now">${t.live.chat.now}</span>` : dayDate(x.sep, { weekday: 'short', day: 'numeric', month: 'short' })}</li>`
       : `<li class="msg${animate && k <= nAnim ? ' pop' : ''}" style="--i:${k}">${blob(x.who)}<div><b>${names[x.who]}${x.ts ? ` <time class="mono">${new Date(x.ts).toLocaleTimeString(loc(), { hour: '2-digit', minute: '2-digit' })}</time>` : ''}</b><p>${esc(x.text)}</p></div></li>`).join('')}</ol>`;
 }
@@ -493,7 +488,10 @@ function paintChart() {
   if (!el) return;
   const key = `${st.coin}|${st.tf}`;
   const w = S.wallets.find(x => x.id === S.view);
-  el.innerHTML = S.cnd.key === key && S.cnd.rows ? drawCandles(S.cnd.rows, st, w ? walletView(w) : null) : `<p class="muted mono cc-load">${S.cnd.err === key ? T().desk.chartError : T().desk.loadingChart}</p>`;
+  const wv = w ? walletView(w) : null;
+  el.innerHTML = S.cnd.key === key && S.cnd.rows ? drawCandles(S.cnd.rows, st, wv) : `<p class="muted mono cc-load">${S.cnd.err === key ? T().desk.chartError : T().desk.loadingChart}</p>`;
+  const mini = document.querySelector('[data-mini]');
+  if (mini && S.cnd.key === key && S.cnd.rows) mini.innerHTML = drawCandles(S.cnd.rows.slice(-90), st, wv).replace('<svg ', '<svg preserveAspectRatio="none" ');
 }
 async function pollTick() {
   const c = S.desk.coin; if (!S.view || !c || document.hidden) return;
@@ -642,16 +640,30 @@ function render(focusTop) {
   document.querySelectorAll('meta[name=theme-color]').forEach(m => m.content = S.set.theme === 'terminal' ? '#050B08' : m.media.includes('dark') ? '#0E1013' : '#F6F4EF');
   html.style.fontSize = (S.set.size * 100) + '%';
   const k = document.activeElement?.dataset?.k;
+  const keepScroll = S.view && S.view === S.lastView ? [...document.querySelectorAll('[data-track] > .pane')].map(p => p.scrollTop) : null;
+  S.lastView = S.view;
+  document.body.classList.toggle('deskmode', !!S.view);
 
   if (!S.set.onboarded) {
     $('#app').innerHTML = onboarding();
     $('#tabs').hidden = true;
   } else {
-    $('#tabs').hidden = false;
+    $('#tabs').hidden = !!S.view;
     const title = S.view ? '' : `<header class="top"><p class="brand"><span aria-hidden="true">⛵</span> Vela</p><h1 tabindex="-1">${t.titles[S.tab]}</h1></header>`;
     const body = S.view ? deskScreen(S.view) : { practice, bots: botsScreen, test: testScreen, settings: settingsScreen }[S.tab]();
     $('#app').innerHTML = title + `<div class="content">${body}</div>`;
     $('#app').classList.toggle('wide', !!S.view);
+    const track = document.querySelector('[data-track]');
+    if (track) {
+      if (keepScroll) track.querySelectorAll(':scope > .pane').forEach((p, i) => (p.scrollTop = keepScroll[i] || 0));
+      const pane = track.children[S.desk.pane || 0];
+      if (pane && track.scrollWidth > track.clientWidth) track.scrollLeft = pane.offsetLeft - (track.clientWidth - pane.clientWidth) / 2;
+      track.addEventListener('scroll', () => {
+        const kids = [...track.children], mid = track.scrollLeft + track.clientWidth / 2;
+        const i = kids.reduce((best, el, j) => Math.abs(el.offsetLeft + el.clientWidth / 2 - mid) < Math.abs(kids[best].offsetLeft + kids[best].clientWidth / 2 - mid) ? j : best, 0);
+        if (i !== S.desk.pane) { S.desk.pane = i; document.querySelectorAll('.dots [role=tab]').forEach((b, j) => b.setAttribute('aria-selected', j === i)); }
+      }, { passive: true });
+    }
     $('#tabs').innerHTML = ['practice', 'bots', 'test', 'settings'].map(id =>
       `<button data-act="tab" data-v="${id}" data-k="tab-${id}" ${S.tab === id ? 'aria-current="page"' : ''}>${ICON[id]}<span>${t.tabs[id]}</span></button>`).join('');
   }
@@ -700,7 +712,12 @@ const ACT = {
     S.setup.bot = null; S.tab = 'practice'; S.view = w.id; render(true); scrollTo(0, 0);
     if (isLive) { S.liveAt = 0; runLive(true); }
   },
-  pane(v) { S.desk.pane = +v; render(); },
+  pane(v) {
+    S.desk.pane = +v;
+    const track = document.querySelector('[data-track]'), pane = track?.children[+v];
+    if (pane) track.scrollTo({ left: pane.offsetLeft - (track.clientWidth - pane.clientWidth) / 2, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    document.querySelectorAll('.dots [role=tab]').forEach((b, j) => b.setAttribute('aria-selected', j === +v));
+  },
   coin(v) { S.desk.coin = v; S.desk.auto = false; render(); },
   tf(v) { S.desk.tf = v; render(); },
   trade(v) { ensureManual(); S.trade = { side: v, coin: S.desk.coin, amt: '0' }; render(); },
