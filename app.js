@@ -209,7 +209,7 @@ function paintLive() {
   }
   for (const el of document.querySelectorAll('[data-pos]')) {
     const c = el.dataset.pos, pos = S.manual && manualBook(S.manual)[c], p = livePx(c);
-    if (pos && p) { const val = pos.q * p, pl = val - pos.cost; el.querySelector('[data-pv]').textContent = money(val); const pe = el.querySelector('[data-pl]'); pe.textContent = signed(pl) + ' · ' + pctTxt(pl / pos.cost); pe.className = 'mono ' + (pl >= 0 ? 'up-t' : 'down-t'); }
+    if (pos && p) { const val = pos.q * p, pl = val * (1 - FEE) - pos.cost; el.querySelector('[data-pv]').textContent = money(val); const pe = el.querySelector('[data-pl]'); pe.textContent = signed(pl) + ' · ' + pctTxt(pl / pos.cost); pe.className = 'mono ' + (pl >= 0 ? 'up-t' : 'down-t'); }
   }
   for (const el of document.querySelectorAll('[data-spark]')) el.innerHTML = sparkPath(el.dataset.spark);
   // Home chart grows while you watch
@@ -388,7 +388,7 @@ function chartPane(st, b, v, m, coins) {
       `<button data-act="tf" data-v="${k}" data-k="tf-${k}" aria-pressed="${st.tf === k}">${k}</button>`).join('')}</div>
     <div class="ypos">
       <div><p class="lbl mono">◆ ${dk.botPos}</p>${botHold ? `<p class="yp-v"><b>${money(botHold.value)}</b><span class="${botHold.gain >= 0 ? 'up-t' : 'down-t'} mono">${signed(botHold.value - botHold.value / (1 + botHold.gain))}<br>${pctTxt(botHold.gain)}</span></p>` : `<p class="muted small">${fill(dk.noBotPos, { c })}</p>`}</div>
-      <div><p class="lbl mono">◇ ${dk.yourPos}</p>${mine && mine.q > 0 && p ? `<p class="yp-v"><b>${money(mine.q * p)}</b><span class="${mine.q * p >= mine.cost ? 'up-t' : 'down-t'} mono">${signed(mine.q * p - mine.cost)}<br>${qty(mine.q)} ${c}</span></p>` : `<p class="muted small">${fill(dk.noYourPos, { c })}</p>`}</div>
+      <div><p class="lbl mono">◇ ${dk.yourPos}</p>${mine && mine.q > 0 && p ? `<p class="yp-v"><b>${money(mine.q * p)}</b><span class="${mine.q * p * (1 - FEE) >= mine.cost ? 'up-t' : 'down-t'} mono">${signed(mine.q * p * (1 - FEE) - mine.cost)}<br>${qty(mine.q)} ${c}</span></p>` : `<p class="muted small">${fill(dk.noYourPos, { c })}</p>`}</div>
     </div>
     <dl class="stats24 mono" data-live-hilo>${hilo(tk)}</dl>
     <p class="warn"><span aria-hidden="true">⚠</span> ${dk.warn}</p>
@@ -825,7 +825,8 @@ function coinScreen() {
   const big = hold ? hold.gain : tk?.chg;
   const stop = b?.stop ?? LIVE.stop;
   const paperCard = isPaper ? `<section class="cp-card"><span class="cp-ic">${blob('fills')}</span><div><b>${t.desk.yourPos}</b><span>${mine && mine.q > 0 ? `${qty(mine.q)} ${c} · ${price(mine.cost / mine.q)}` : fill(t.desk.noYourPos, { c })}</span></div>
-      ${mine && mine.q > 0 && p ? `<div class="r" data-pos="${c}"><b class="mono" data-pv>${money(mine.q * p)}</b><span data-pl class="mono ${mine.q * p >= mine.cost ? 'up-t' : 'down-t'}">${signed(mine.q * p - mine.cost)}</span></div>` : ''}</section>
+      ${mine && mine.q > 0 && p ? `<div class="r" data-pos="${c}"><b class="mono" data-pv>${money(mine.q * p)}</b><span data-pl class="mono ${mine.q * p * (1 - FEE) >= mine.cost ? 'up-t' : 'down-t'}">${signed(mine.q * p * (1 - FEE) - mine.cost)}</span></div>` : ''}</section>
+      ${mine && mine.q > 0 ? `<p class="muted small cp-cash">${fill(t.paper.breakEven, { p: price(mine.cost / (mine.q * (1 - FEE))) })}</p>` : ''}
       <p class="muted small cp-cash">${fill(t.paper.cashLine, { usd: money(S.manual ? S.manual.cash : 0) })}</p>` : '';
   return `<div class="cp-top"><button class="cp-back" data-act="coinback" data-k="coinback"><span aria-hidden="true">‹</span> ${isPaper ? t.tabs.trade : cc.back}</button><span aria-hidden="true" class="star">☆</span></div>
     <div class="cp-id">${coinAv(c)}<div><h1 tabindex="-1">${COIN[c] || c}</h1><p class="muted">${c} · ${fill(cc.exchange, { c })}</p></div></div>
@@ -854,7 +855,7 @@ function tradeScreen() {
       <p class="hm-sub"><span class="chg ${gain >= 0 ? 'up' : 'down'}"><span aria-hidden="true">${gain >= 0 ? '▲' : '▼'}</span> ${money(Math.abs(gain))} (${num1(Math.abs(gain / m.start * 100))}%)</span>
         <span class="muted small">· ${fill(pt.cashLine, { usd: money(m.cash) })}</span></p></section>
     <section class="hm-sec"><div class="hm-h"><h2>${pt.positions}</h2></div>
-      ${pos.length ? `<ul class="act">${pos.map(([c, x]) => { const p = livePx(c) || 0, v2 = x.q * p, pl = v2 - x.cost; return `<li><button class="act-r" data-act="coinpage" data-v="${c}|manual" data-k="pos-${c}">
+      ${pos.length ? `<ul class="act">${pos.map(([c, x]) => { const p = livePx(c) || 0, v2 = x.q * p, pl = v2 * (1 - FEE) - x.cost; return `<li><button class="act-r" data-act="coinpage" data-v="${c}|manual" data-k="pos-${c}">
         <span class="act-av">${coinAv(c)}</span><span class="act-m"><b>${COIN[c] || c}</b><span class="mono">${qty(x.q)} ${c} · ${price(x.cost / x.q)}</span></span>
         <span class="act-v" data-pos="${c}"><b class="mono" data-pv>${money(v2)}</b><span data-pl class="mono ${pl >= 0 ? 'up-t' : 'down-t'}">${signed(pl)} · ${pctTxt(pl / x.cost)}</span></span></button></li>`; }).join('')}</ul>`
         : `<p class="muted small hm-empty">${pt.noPos}</p>`}</section>

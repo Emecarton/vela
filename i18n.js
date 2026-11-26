@@ -73,7 +73,7 @@ export const STR = {
     paper: {
       title: 'Paper trading', reset: 'Reiniciar', resetConfirm: '¿Volver a empezar con 10.000 $ de práctica? Se borran tus operaciones.',
       positions: 'Tus posiciones', markets: 'Mercados', noPos: 'Aún no tienes nada. Toca una moneda y pulsa Comprar.',
-      cashLine: '{usd} disponibles', note: 'Precios reales de Binance en directo. El dinero es de práctica.', spark: 'Las líneas muestran las últimas 24 horas.',
+      cashLine: '{usd} disponibles', note: 'Precios reales de Binance en directo. El dinero es de práctica.', spark: 'Las líneas muestran las últimas 24 horas. Las ganancias ya descuentan la comisión del 0,1% al comprar y al vender.', breakEven: 'Empiezas a ganar por encima de {p} (por las comisiones del 0,1% al comprar y al vender).',
       botNote: 'Comprar y Vender usan tu cartera de paper trading, no la del bot.',
     },
     home: {
@@ -275,7 +275,7 @@ export const STR = {
     paper: {
       title: 'Paper trading', reset: 'Reset', resetConfirm: 'Start over with $10,000 of practice money? Your trades will be deleted.',
       positions: 'Your positions', markets: 'Markets', noPos: 'Nothing yet. Tap a coin and press Buy.',
-      cashLine: '{usd} available', note: 'Real Binance prices, live. The money is practice money.', spark: 'The lines show the last 24 hours.',
+      cashLine: '{usd} available', note: 'Real Binance prices, live. The money is practice money.', spark: 'The lines show the last 24 hours. Gains already take off the 0.1% fee on buying and selling.', breakEven: 'You start making money above {p} (because of the 0.1% fee on buying and on selling).',
       botNote: 'Buy and Sell use your paper trading wallet, not the bot’s.',
     },
     home: {
