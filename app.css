@@ -485,9 +485,10 @@ body.deskmode #app { max-width: none; padding: 0; }
 .hchart.down path { stroke: #FF4D5E; filter: drop-shadow(0 0 6px rgb(255 77 94 / .4)); }
 .cend { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: #22D47E; box-shadow: 0 0 0 4px rgb(34 212 126 / .25), 0 0 14px #22D47E; animation: blink 1.6s ease-in-out infinite; }
 .hchart.down .cend { background: #FF4D5E; box-shadow: 0 0 0 4px rgb(255 77 94 / .25), 0 0 14px #FF4D5E; }
-.cmark { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; pointer-events: none; }
-.cmark i { width: 9px; height: 9px; border-radius: 50%; border: 2px solid #000; }
-.cmark b { order: -1; margin-bottom: 4px; padding: 3px 8px; border-radius: 999px; font-size: .72rem; white-space: nowrap; }
+.cmark { position: absolute; width: 0; height: 0; pointer-events: none; }
+.cmark i { position: absolute; left: -5px; top: -5px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #000; }
+.cmark b { position: absolute; bottom: 9px; left: 0; transform: translateX(-50%); padding: 3px 8px; border-radius: 999px; font-size: .72rem; white-space: nowrap; }
+.cmark.rt b { transform: translateX(calc(-100% + 12px)); } .cmark.lt b { transform: translateX(-12px); }
 .cmark.r i { background: #FF4D5E; } .cmark.r b { background: #FF4D5E; color: #fff; }
 .cmark.g i { background: #22D47E; } .cmark.g b { background: #22D47E; color: #021208; }
 .hm-tf { display: flex; justify-content: space-between; gap: 4px; margin: 4px 0 18px; }

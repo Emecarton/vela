@@ -564,7 +564,8 @@ function homeChart(w, v) {
   const up = g.last >= g.first, ts = tradeStats(v.trades).sells.filter(s => (s.ts ?? (s.day + 1) * DAY) >= g.ta).slice(-3);
   const marks = ts.map(s => {
     const t = s.ts ?? (s.day + 1) * DAY, near = pts.reduce((a, p) => Math.abs(p[0] - t) < Math.abs(a[0] - t) ? p : a, pts[0]);
-    return `<span class="cmark ${s.pnl >= 0 ? 'g' : 'r'}" style="left:${Math.min(92, Math.max(8, g.X(t))).toFixed(1)}%;top:${g.Y(near[1]).toFixed(1)}%"><i></i><b class="mono">${pctTxt(s.pct)} · ${signed(s.pnl)}</b></span>`;
+    const xx = Math.min(97, Math.max(3, g.X(t)));
+    return `<span class="cmark ${s.pnl >= 0 ? 'g' : 'r'}${xx > 70 ? ' rt' : xx < 30 ? ' lt' : ''}" style="left:${xx.toFixed(1)}%;top:${g.Y(near[1]).toFixed(1)}%"><i></i><b class="mono">${pctTxt(s.pct)} · ${signed(s.pnl)}</b></span>`;
   }).join('');
   return `<div class="hchart ${up ? 'up' : 'down'}" data-hchart>
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${esc(`${money(g.first)} → ${money(g.last)}`)}"><path d="${g.d}" vector-effect="non-scaling-stroke"/></svg>
