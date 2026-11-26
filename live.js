@@ -80,7 +80,7 @@ export function liveStep(st, bars, P = LIVE) {
       }
     }
     st.last = t;
-    if (((t / P.ms) % 4) === 3 || t === times[times.length - 1]) {
+    {  // value after every candle (the Home chart draws these)
       const v = st.cash + (st.pos ? st.pos.q * (lastPx[st.pos.c] ?? st.pos.entry) : 0);
       if (st.eq.length && st.eq[st.eq.length - 1][0] === t + P.ms) st.eq[st.eq.length - 1][1] = v; else st.eq.push([t + P.ms, v]);
     }

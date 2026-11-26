@@ -1,4 +1,4 @@
-# Vela ⛵
+# EME Bots
 
 Simple crypto bots you can practice with. Pick a bot personality, give it pretend money, and watch it trade on real prices. Or use the time machine to see how it would have done in the past.
 
