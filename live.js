@@ -44,14 +44,17 @@ export function liveStep(st, bars, P = LIVE) {
 
   for (const t of times) {
     for (const c in bars) { const k = at[c].get(t); if (k != null) lastPx[c] = bars[c][k].c; }
+    // candles the app was open for: stops, profit locks and buys already happened live, tick by tick
+    const watched = st.watchFrom != null && t >= st.watchFrom && t + P.ms <= (st.watchTo ?? 0);
     const o = st.pos;
     if (o) {
       const k = at[o.c].get(t);
       if (k != null) {
         const b = bars[o.c][k], sp = o.entry * (1 + P.stop);
         const tp = o.peak >= o.entry * (1 + P.trailAt) ? o.peak * (1 - P.trail) : null;
-        if (b.l <= sp) sell(t, Math.min(b.o, sp), 'live_stop');
-        else if (tp != null && b.l <= tp) sell(t, Math.min(b.o, tp), 'live_profit');
+        const fresh = o.since > t; // bought live during this very candle: its earlier lows don't count
+        if (!watched && !fresh && b.l <= sp) sell(t, Math.min(b.o, sp), 'live_stop');
+        else if (!watched && !fresh && tp != null && b.l <= tp) sell(t, Math.min(b.o, tp), 'live_profit');
         else {
           o.peak = Math.max(o.peak, b.h); o.bars++;
           const a = avg(o.c, k);
@@ -60,7 +63,7 @@ export function liveStep(st, bars, P = LIVE) {
         }
       }
     }
-    if (!st.pos && t >= st.coolUntil) {
+    if (!st.pos && !watched && t >= st.coolUntil) {
       const kb = at.BTC.get(t), ab = kb != null ? avg('BTC', kb) : null;
       if (ab != null && bars.BTC[kb].c > ab) {
         let best = null;
@@ -105,4 +108,41 @@ export function liveExplain(bars, P = LIVE) {
   for (const x of coins) x.w = pick && x.c === pick.c ? 1 : 0;
   coins.sort((x, y) => (y.w - x.w) || (y.trend - x.trend) || ((y.r ?? -9) - (x.r ?? -9)));
   return { t: btc[kb]?.t, btcUp, btc: btc[kb]?.c, btcAvg: ab, coins };
+}
+
+// ---------- real time: called on every live price while the app is open ----------
+// Exits at the live price the moment the stop or the profit lock is hit.
+export function liveWatch(st, px, ts, P = LIVE) {
+  const o = st.pos;
+  st.watchTo = ts;
+  if (!o || px[o.c] == null) return null;
+  const p = px[o.c], sp = o.entry * (1 + P.stop);
+  const tp = o.peak >= o.entry * (1 + P.trailAt) ? o.peak * (1 - P.trail) : null;
+  let why = null;
+  if (p <= sp) why = 'live_stop';
+  else if (tp != null && p <= tp) why = 'live_profit';
+  o.peak = Math.max(o.peak, p);
+  if (!why) return null;
+  const usd = o.q * p * (1 - FEE), tr = { ts, c: o.c, side: 'sell', usd, p, q: o.q, why, pnl: usd - o.cost };
+  st.cash += usd; st.trades.push(tr); st.pos = null; st.coolUntil = ts + P.cool * P.ms;
+  return tr;
+}
+// Looks for a buy using the closed candles plus the live price as the candle that is forming now.
+export function liveEnter(st, bars, px, ts, P = LIVE) {
+  if (st.pos || ts < st.coolUntil || !bars.BTC?.length) return null;
+  const slot = Math.floor(ts / P.ms) * P.ms, withNow = {};
+  for (const c in bars) {
+    const b = bars[c]; if (!b.length || px[c] == null) continue;
+    const last = b[b.length - 1];
+    withNow[c] = last.t >= slot ? b : [...b, { t: slot, o: last.c, h: Math.max(last.c, px[c]), l: Math.min(last.c, px[c]), c: px[c] }];
+  }
+  if (!withNow.BTC) return null;
+  const e = liveExplain(withNow, P), pick = e.coins.find(x => x.w);
+  if (!pick) return null;
+  const p = px[pick.c], usd = st.cash * P.size, q = usd * (1 - FEE) / p;
+  st.cash -= usd;
+  st.pos = { c: pick.c, q, entry: p, peak: p, bars: 0, cost: usd, since: ts };
+  const tr = { ts, c: pick.c, side: 'buy', usd, p, q, why: 'live_mom', move: pick.r };
+  st.trades.push(tr);
+  return tr;
 }

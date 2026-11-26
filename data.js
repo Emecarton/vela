@@ -109,3 +109,35 @@ export async function klinesRange(coin, interval, ms, from) {
   const now = Date.now();
   return out.filter(r => r[6] < now).map(r => ({ t: r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4] }));
 }
+
+// Real-time prices: Binance's public market stream (one update per coin per second). Falls back to
+// asking every 5 seconds if the stream can't connect. Returns a function that stops it.
+export function liveStream(coins, onTicks) {
+  let ws = null, stopped = false, fails = 0, poll = null;
+  const url = 'wss://data-stream.binance.vision/stream?streams=' + coins.map(c => c.toLowerCase() + 'usdt@miniTicker').join('/');
+  const parse = m => ({ p: +m.c, chg: +m.o ? +m.c / +m.o - 1 : 0, hi: +m.h, lo: +m.l, vol: +m.q });
+  const startPoll = () => {
+    if (poll || stopped) return;
+    const run = async () => {
+      try {
+        const syms = encodeURIComponent(JSON.stringify(coins.map(c => c + 'USDT')));
+        const rows = await get(`/api/v3/ticker/24hr?symbols=${syms}`);
+        const out = {};
+        for (const r of rows) out[r.symbol.replace(/USDT$/, '')] = { p: +r.lastPrice, chg: +r.priceChangePercent / 100, hi: +r.highPrice, lo: +r.lowPrice, vol: +r.quoteVolume };
+        onTicks(out);
+      } catch { }
+    };
+    run(); poll = setInterval(run, 5000);
+  };
+  const open = () => {
+    if (stopped) return;
+    try { ws = new WebSocket(url); } catch { startPoll(); return; }
+    ws.onmessage = e => {
+      try { const m = JSON.parse(e.data).data; if (m && m.s) { fails = 0; onTicks({ [m.s.replace(/USDT$/, '')]: parse(m) }); } } catch { }
+    };
+    ws.onclose = () => { if (stopped) return; fails++; if (fails >= 3) startPoll(); setTimeout(open, Math.min(30e3, 1500 * fails)); };
+    ws.onerror = () => { try { ws.close(); } catch { } };
+  };
+  open();
+  return () => { stopped = true; try { ws && ws.close(); } catch { } clearInterval(poll); };
+}

@@ -1,6 +1,6 @@
 // node test/live.test.mjs — the ⚡ Live bot on made-up 15-minute candles.
 import assert from 'node:assert/strict';
-import { LIVE, newLiveState, liveStep, liveExplain } from '../live.js';
+import { LIVE, newLiveState, liveStep, liveExplain, liveWatch, liveEnter } from '../live.js';
 
 let n = 0;
 const test = (name, fn) => { fn(); n++; console.log('ok -', name); };
@@ -62,6 +62,35 @@ test('explain picks the same coin the bot buys', () => {
   const bars = mk(200, (c, k) => 100 * (1 + (c === 'AVAX' ? 0.002 : 0.0005)) ** k);
   const e = liveExplain(bars);
   assert.equal(e.coins[0].c, 'AVAX'); assert.equal(e.coins[0].w, 1); assert.ok(e.btcUp);
+});
+
+test('live watching: buys on the live price, stops out the moment −5% is hit', () => {
+  const bars = mk(200, (c, k) => 100 * (1 + (c === 'SOL' ? 0.002 : 0.0005)) ** k);
+  const st = newLiveState(1000, T0 + 199 * MS); st.last = bars.BTC.at(-1).t;
+  const px = Object.fromEntries(Object.entries(bars).map(([c, b]) => [c, b.at(-1).c]));
+  const now = T0 + 200 * MS + 60e3;
+  const buy = liveEnter(st, bars, px, now);
+  assert.ok(buy && buy.c === 'SOL' && st.pos);
+  assert.equal(liveWatch(st, { SOL: px.SOL * 0.97 }, now + 1000), null);
+  const out = liveWatch(st, { SOL: px.SOL * 0.949 }, now + 2000);
+  assert.ok(out && out.why === 'live_stop' && out.pnl < 0 && !st.pos);
+});
+
+test('live watching: profit lock after +5%, then −2.5% from the top', () => {
+  const st = newLiveState(1000, T0); st.cash = 0;
+  st.pos = { c: 'ETH', q: 10, entry: 100, peak: 100, bars: 0, cost: 1000, since: T0 };
+  liveWatch(st, { ETH: 108 }, T0 + 1);
+  assert.ok(st.pos);
+  const out = liveWatch(st, { ETH: 105.2 }, T0 + 2);
+  assert.ok(out && out.why === 'live_profit' && out.pnl > 0);
+});
+
+test('candles the app watched live are not double-counted', () => {
+  const bars = mk(200, (c, k) => 100 * (1 + (c === 'SOL' ? 0.002 : 0.0005)) ** k);
+  const st = newLiveState(1000, T0 + 120 * MS);
+  st.watchFrom = T0 + 120 * MS; st.watchTo = T0 + 200 * MS;
+  liveStep(st, bars);
+  assert.equal(st.trades.length, 0, 'entries in watched candles came from the live loop, not the replay');
 });
 
 console.log(`\n${n} tests passed`);

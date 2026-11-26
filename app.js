@@ -1,7 +1,7 @@
 // app.js — the screens. No frameworks: plain HTML strings, one render() for everything.
-import { BOTS, botById, simulate, holdBTC, stats, yearly, runWallet, explain, tradeStats, DAY } from './engine.js';
-import { loadMarket, candles, ticker, TF, klinesRange } from './data.js';
-import { LIVE, newLiveState, liveStep, liveExplain } from './live.js';
+import { BOTS, botById, simulate, holdBTC, stats, yearly, runWallet, explain, tradeStats, DAY, UNIVERSE } from './engine.js';
+import { loadMarket, candles, ticker, TF, klinesRange, liveStream } from './data.js';
+import { LIVE, newLiveState, liveStep, liveExplain, liveWatch, liveEnter } from './live.js';
 import { STR } from './i18n.js';
 
 const COIN = { BTC: 'Bitcoin', ETH: 'Ethereum', SOL: 'Solana', BNB: 'BNB', XRP: 'XRP', ADA: 'Cardano', DOGE: 'Dogecoin', AVAX: 'Avalanche', LINK: 'Chainlink', DOT: 'Polkadot', LTC: 'Litecoin', NEAR: 'NEAR', UNI: 'Uniswap', TRX: 'TRON', BCH: 'Bitcoin Cash' };
@@ -72,7 +72,11 @@ const memo = new Map();
 function cached(key, fn) { if (!memo.has(key)) memo.set(key, fn()); return memo.get(key); }
 function walletView(w) {
   if (w.bot === 'live') return liveView(w);
-  return cached(`w|${w.id}|${S.mk.at}`, () => runWallet(w, S.mk.d, S.mk.live));
+  const r = cached(`w|${w.id}|${S.mk.at}`, () => runWallet(w, S.mk.d, S.mk.live));
+  if (r.pending || !r.holdings?.length) return r;
+  let value = r.cash;
+  const holdings = r.holdings.map(h => { const q = h.value / h.now, now = S.tick[h.c]?.p ?? h.now; value += q * now; return { ...h, now, value: q * now, gain: now / h.entry - 1 }; });
+  return { ...r, holdings, value, eq: [...r.eq.slice(0, -1), value] };
 }
 
 // ---------- ⚡ Live bot: runs on 15-minute candles, catches up whenever the app opens ----------
@@ -130,6 +134,94 @@ function toast(msg) {
 }
 setInterval(() => { if (S.mk && Math.floor(Date.now() / LIVE.ms) !== Math.floor((S.liveAt || 0) / LIVE.ms)) runLive(); }, 30e3);
 
+// ---------- real time: every price, every second ----------
+const ALL_COINS = [...new Set([...UNIVERSE, ...LIVE.coins])];
+let stopStream = null, uiQueued = false, lastEnter = 0, lastChartPt = 0, lastCandlePaint = 0;
+function startStream() {
+  if (stopStream) return;
+  stopStream = liveStream(ALL_COINS, ticks => {
+    for (const c in ticks) S.tick[c] = { ...ticks[c], prev: S.tick[c]?.p, at: Date.now() };
+    onLiveTick();
+  });
+}
+function notifyTrade(x) {
+  toast(fill(T().live.toast[x.side], { b: T().live.name, c: x.c, p: price(x.p), pnl: x.pnl == null ? '' : signed(x.pnl) }));
+}
+function onLiveTick() {
+  const now = Date.now(), px = {};
+  for (const c in S.tick) px[c] = S.tick[c].p;
+  let changed = false;
+  const slot = Math.floor(now / LIVE.ms) * LIVE.ms, entryCheck = now - lastEnter > 60e3;
+  for (const w of S.wallets) {
+    if (w.bot !== 'live' || !w.st || S.liveBusy) continue;
+    if (w.st.last < slot - 2 * LIVE.ms) continue; // still catching up on missed candles
+    if (w.st.watchFrom == null || now - (w.st.watchTo || 0) > 120e3) w.st.watchFrom = now;
+    const out = liveWatch(w.st, px, now);
+    if (out) { changed = true; notifyTrade(out); }
+    if (entryCheck && S.lbars.BTC?.length) { const inn = liveEnter(w.st, S.lbars, px, now); if (inn) { changed = true; notifyTrade(inn); } }
+  }
+  if (entryCheck) lastEnter = now;
+  if (changed) { saveWallets(); render(); return; }
+  if (now - (S.savedWatch || 0) > 30e3) { S.savedWatch = now; saveWallets(); }
+  if (!uiQueued) { uiQueued = true; setTimeout(() => { uiQueued = false; paintLive(); }, 350); }
+}
+function sparkPath(c) {
+  const d = S.mk?.d, s = d?.px[c]; if (!s) return '';
+  const vals = s.slice(-30).filter(x => x != null); const p = livePx(c); if (p) vals.push(p);
+  if (vals.length < 2) return '';
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const pts = vals.map((v, k) => `${(k / (vals.length - 1) * 100).toFixed(1)},${(4 + (1 - (v - lo) / span) * 32).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline class="${vals[vals.length - 1] >= vals[0] ? 'up' : 'down'}" points="${pts}" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function flash(el, up) { el.classList.remove('fu', 'fd'); void el.offsetWidth; el.classList.add(up ? 'fu' : 'fd'); }
+function rollTo(el, v) {
+  const from = el._v ?? v; el._v = v;
+  if (Math.abs(from - v) < 0.005) { el.textContent = money(v); return; }
+  flash(el, v >= from);
+  const t0 = performance.now(), dur = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 450;
+  const step = t => { const k = dur ? Math.min(1, (t - t0) / dur) : 1; el.textContent = money(from + (v - from) * (1 - (1 - k) ** 3)); if (k < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+}
+function paintLive() {
+  if (document.hidden) return;
+  const now = Date.now();
+  for (const el of document.querySelectorAll('[data-px]')) {
+    const t = S.tick[el.dataset.px]; if (!t) continue;
+    const txt = price(t.p); if (el.textContent !== txt) { el.textContent = txt; flash(el, t.p >= (t.prev ?? t.p)); }
+  }
+  for (const el of document.querySelectorAll('[data-chg]')) { const t = S.tick[el.dataset.chg]; if (t) el.innerHTML = chg(t.chg); }
+  for (const el of document.querySelectorAll('[data-wv]')) {
+    const id = el.dataset.wv, w = S.wallets.find(x => x.id === id);
+    const v = id === 'manual' ? (S.manual ? manualValue(S.manual) : null) : w && S.mk ? walletView(w).value : null;
+    if (v != null) rollTo(el, v);
+  }
+  for (const el of document.querySelectorAll('[data-pos]')) {
+    const c = el.dataset.pos, pos = S.manual && manualBook(S.manual)[c], p = livePx(c);
+    if (pos && p) { const val = pos.q * p, pl = val - pos.cost; el.querySelector('[data-pv]').textContent = money(val); const pe = el.querySelector('[data-pl]'); pe.textContent = signed(pl) + ' · ' + pctTxt(pl / pos.cost); pe.className = 'mono ' + (pl >= 0 ? 'up-t' : 'down-t'); }
+  }
+  for (const el of document.querySelectorAll('[data-spark]')) el.innerHTML = sparkPath(el.dataset.spark);
+  // Home chart grows while you watch
+  const hc = document.querySelector('[data-hchart]');
+  if (hc && now - lastChartPt > 3000) {
+    lastChartPt = now;
+    const w = homeWallet();
+    if (w && S.mk) { const v = walletView(w); (S.livePts[w.id] ||= []).push([now, v.value]); if (S.livePts[w.id].length > 2500) S.livePts[w.id].shift(); hc.outerHTML = homeChart(w, v); }
+  }
+  // the newest candle moves with the live price
+  if (S.cnd.rows && (S.view || S.coin) && now - lastCandlePaint > 1000) {
+    const c = S.desk.coin, t = S.tick[c], rows = S.cnd.rows;
+    if (t && rows.length > 1) {
+      const ms = rows[1].t - rows[0].t, last = rows[rows.length - 1];
+      if (now < last.t + ms) { last.c = t.p; last.h = Math.max(last.h, t.p); last.l = Math.min(last.l, t.p); }
+      else rows.push({ t: last.t + ms, o: last.c, h: t.p, l: t.p, c: t.p, v: 0 });
+      lastCandlePaint = now; paintChart();
+    }
+  }
+  const tp = document.querySelector('[data-ts-px]');
+  if (tp && S.trade) { const p = livePx(S.trade.coin); if (p) { tp.textContent = price(p); const q = document.querySelector('.ts-q'); if (q) q.textContent = '≈ ' + qty((+S.trade.amt || 0) / p) + ' ' + S.trade.coin; } }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) paintLive(); });
+
 async function refresh(manual) {
   if (S.loading) return;
   S.loading = true; S.error = null; render();
@@ -174,11 +266,11 @@ function practice() {
         : v.holdings.length ? `${t.holds}: ${v.holdings.map(h => h.c).join(', ')}` : t.inCash;
       return `<li><button class="card wallet" data-act="open" data-v="${w.id}" data-k="open-${w.id}">
         ${avatar(b)}<span class="wl-main"><span class="wl-name">${botName(b)}</span><span class="muted">${esc(hold)}</span></span>
-        <span class="wl-val"><span class="wl-money">${money(v.value)}</span>${chg(v.value / w.cash - 1)}</span>
+        <span class="wl-val"><span class="wl-money" data-wv="${w.id}">${money(v.value)}</span>${chg(v.value / w.cash - 1)}</span>
       </button></li>`;
     }).join('')}${S.manual ? `<li><button class="card wallet" data-act="manual" data-k="open-manual"><span class="av" style="--h:200" aria-hidden="true">🧑</span>
         <span class="wl-main"><span class="wl-name">${t.desk.you}</span><span class="muted">${t.desk.youLine}</span></span>
-        <span class="wl-val"><span class="wl-money">${money(mv)}</span>${chg(mv / S.manual.start - 1)}</span></button></li>` : ''}</ul>
+        <span class="wl-val"><span class="wl-money" data-wv="manual">${money(mv)}</span>${chg(mv / S.manual.start - 1)}</span></button></li>` : ''}</ul>
     <div class="actions"><button class="btn ghost" data-act="tab" data-v="bots" data-k="add-bot">+ ${t.addBot}</button>
     ${S.manual ? '' : `<button class="btn ghost" data-act="manual" data-k="go-manual">🧑 ${t.desk.you}</button>`}</div>`;
 }
@@ -202,16 +294,26 @@ const BLOB = {
   risk: ['#FF7A1A', 'M20 4c9.4 0 15 6.6 15 15.5S29.4 36 20 36 5 28.4 5 19.5 10.6 4 20 4z'],
   market: ['#FF5FA8', 'M20 3c6 7 14 13 14 21a14 14 0 0 1-28 0C6 16 14 10 20 3z'],
 };
-const blob = k => { const [c, d] = BLOB[k]; return `<svg class="blob" viewBox="0 0 40 40" aria-hidden="true"><path d="${d}" fill="${c}"/>
-  <ellipse cx="15" cy="20" rx="3.4" ry="4.2" fill="#fff"/><ellipse cx="25" cy="20" rx="3.4" ry="4.2" fill="#fff"/>
-  <circle cx="15.8" cy="21" r="1.9" fill="#0B0D12"/><circle cx="25.8" cy="21" r="1.9" fill="#0B0D12"/></svg>`; };
+let BID = 0;
+const mix = (hex, to, k) => { const n = parseInt(hex.slice(1), 16), m = parseInt(to.slice(1), 16), c = i => Math.round(((n >> i) & 255) * (1 - k) + ((m >> i) & 255) * k); return `rgb(${c(16)},${c(8)},${c(0)})`; };
+// Agent characters: a glossy body, a soft highlight and eyes that blink now and then.
+const blob = k => {
+  const [c, d] = BLOB[k], id = 'bl' + (++BID), delay = ((BID * 1.7) % 5).toFixed(1);
+  return `<svg class="blob" viewBox="0 0 40 40" aria-hidden="true" style="--d:${delay}s"><defs>
+    <radialGradient id="${id}" cx="35%" cy="28%" r="80%"><stop offset="0" stop-color="${mix(c, '#ffffff', .45)}"/><stop offset=".55" stop-color="${c}"/><stop offset="1" stop-color="${mix(c, '#000000', .35)}"/></radialGradient>
+    <clipPath id="${id}c"><path d="${d}"/></clipPath></defs>
+    <path d="${d}" fill="url(#${id})"/>
+    <ellipse cx="14" cy="11" rx="7" ry="4" fill="#fff" opacity=".32" clip-path="url(#${id}c)"/>
+    <g class="eyes"><ellipse cx="15" cy="20" rx="3.6" ry="4.4" fill="#fff"/><ellipse cx="25" cy="20" rx="3.6" ry="4.4" fill="#fff"/>
+    <circle cx="15.9" cy="21" r="2" fill="#0B0D12"/><circle cx="25.9" cy="21" r="2" fill="#0B0D12"/><circle cx="16.6" cy="20.1" r=".7" fill="#fff"/><circle cx="26.6" cy="20.1" r=".7" fill="#fff"/></g></svg>`;
+};
 const price = p => new Intl.NumberFormat(loc(), { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', useGrouping: 'always', minimumFractionDigits: p < 1 ? 4 : 2, maximumFractionDigits: p < 1 ? 5 : p < 100 ? 3 : 2 }).format(p);
 const qty = q => new Intl.NumberFormat(loc(), { maximumSignificantDigits: 5 }).format(q);
 const signed = v => (v >= 0 ? '+' : '−') + money(Math.abs(v));
 
 // Your own practice wallet (you trade by hand, next to the bots).
 function manual() { return S.manual; }
-function ensureManual() { if (!S.manual) { S.manual = { cash: 1000, start: 1000, fills: [], created: Date.now() }; store.set('manual', S.manual); } return S.manual; }
+function ensureManual() { if (!S.manual) { S.manual = { cash: 10000, start: 10000, fills: [], created: Date.now() }; store.set('manual', S.manual); } return S.manual; }
 function manualBook(m) {
   const pos = {};
   for (const f of m.fills) { const p = pos[f.c] || (pos[f.c] = { q: 0, cost: 0 }); if (f.side === 'buy') { p.q += f.q; p.cost += f.usd; } else { const sh = p.q ? f.q / p.q : 1; p.cost -= p.cost * sh; p.q -= f.q; if (p.q < 1e-12) { p.q = 0; p.cost = 0; } } }
@@ -265,9 +367,9 @@ function chartPane(st, b, v, m, coins) {
   const botHold = v?.holdings?.find(h => h.c === c);
   const mine = manualBook(m || S.manual || { fills: [] })[c];
   const key = `${c}|${st.tf}`;
-  return `<div class="cc-head"><span class="coin-av" aria-hidden="true">${c.slice(0, 1)}</span>
+  return `<div class="cc-head">${coinAv(c, false, true)}
       <div class="cc-name"><b>${c} <span aria-hidden="true">≡</span></b><span>${COIN[c] || c}</span></div>
-      <div class="cc-px"><b class="mono" data-live-p>${p ? price(p) : '—'}</b><span data-live-c>${tk ? chg(tk.chg) : ''}</span></div></div>
+      <div class="cc-px"><b class="mono" data-px="${c}">${p ? price(p) : '—'}</b><span data-chg="${c}">${tk ? chg(tk.chg) : ''}</span></div></div>
     <div class="coin-pick" role="group" aria-label="${T().ag.radar}">${coins.map(x => `<button class="cp${x === c ? ' on' : ''}" data-act="coin" data-v="${x}" data-k="coin-${x}" aria-pressed="${x === c}">${x}</button>`).join('')}</div>
     <div class="candles" data-candles>${S.cnd.key === key && S.cnd.rows ? drawCandles(S.cnd.rows, st, v) : `<p class="muted mono cc-load">${S.cnd.err === key ? dk.chartError : dk.loadingChart}</p>`}</div>
     <div class="tf" role="group" aria-label="Timeframe"><span class="livedot mono"><i class="dot" aria-hidden="true"></i>${dk.live}</span>${Object.keys(TF).map(k =>
@@ -337,7 +439,7 @@ function analysisPane(st, b, e, v, w, m) {
     const all = [...openRows, ...closed.reverse()];
     const dayN = Math.max(1, Math.floor((Date.now() - (w.startTs ?? w.startDay * DAY)) / DAY) + 1);
     desk = `<div class="ph mono"><b>${dk.deskT}</b><span class="red">${fill(dk.dayN, { n: dayN })}</span></div><p class="lbl mono">${dk.bank} · ${fill(dk.startedWith, { usd: money(w.cash) })}</p>
-      <p class="bank mono ${v.value >= w.cash ? 'up-t' : 'down-t'}" data-wallet-val>${money(v.value)}</p>
+      <p class="bank mono ${v.value >= w.cash ? 'up-t' : 'down-t'}" data-wv="${w.id}">${money(v.value)}</p>
       <p class="lbl-xs mono">${fill(dk.tradesLine, { n: v.trades.length, g: ts.wins, r: ts.losses, w: ts.worst ? signed(ts.worst.pnl) : '—' })}</p>
       ${all.length ? `<ol class="dtrades mono">${all.map((x, k) => `<li><span class="dn">#${all.length - k}</span>
         <span><b>$${x.c}</b> ${price(x.entry)} → ${price(x.exit)}<br><span class="muted">${x.hours != null ? fill(t.live.inHours, { n: x.hours }) : fill(dk.inDays, { n: x.days })} · <span class="${x.open ? 'st-open' : ''}">${x.open ? dk.open : dk.closed}</span></span></span>
@@ -452,7 +554,7 @@ function tradeDialog() {
   const dk = T().desk, tt = dk.trade, p = livePx(tr.coin), m = ensureManual(), pos = manualBook(m)[tr.coin];
   const base = tr.side === 'buy' ? m.cash : (pos ? pos.q * p : 0), amt = +tr.amt || 0;
   return `<form method="dialog" class="sheet tsheet">
-    <div class="ts-top"><span class="coin-av" aria-hidden="true">${tr.coin[0]}</span><div><h2 id="trade-title">${tt.title[tr.side]} $${tr.coin}</h2><p class="muted mono">${p ? price(p) : '—'}</p></div>
+    <div class="ts-top">${coinAv(tr.coin, false, true)}<div><h2 id="trade-title">${tt.title[tr.side]} $${tr.coin}</h2><p class="muted mono" data-ts-px>${p ? price(p) : '—'}</p></div>
       <button class="x" data-act="tclose" data-k="tclose" aria-label="${tt.close}">✕</button></div>
     <p class="ts-amt mono" aria-live="polite">${money(amt)}</p>
     <p class="muted mono ts-q">≈ ${p ? qty(amt / p) : 0} ${tr.coin}</p>
@@ -518,7 +620,8 @@ setInterval(() => { if (S.view) loadCandles(); }, 60e3);
 
 // ---------- Home (like the 3rd video): big balance, live chart, agents carousel, activity ----------
 const HUES = { BTC: 32, ETH: 230, SOL: 280, BNB: 45, XRP: 210, ADA: 220, DOGE: 42, AVAX: 0, LINK: 220, DOT: 330, LTC: 210, NEAR: 160, UNI: 320, TRX: 355, BCH: 120 };
-const coinAv = (c, small) => `<span class="cav${small ? ' sm' : ''}" style="--h:${HUES[c] ?? 200}" aria-hidden="true">${c[0]}</span>`;
+const LOGO = c => `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/${c.toLowerCase()}.svg`;
+const coinAv = (c, small, big) => `<span class="cav${small ? ' sm' : ''}${big ? ' lg' : ''}" style="--h:${HUES[c] ?? 200}" aria-hidden="true"><b>${c[0]}</b><img src="${LOGO(c)}" alt="" loading="lazy" onerror="this.remove()"></span>`;
 const RANGES = { LIVE: 2 * 36e5, '1H': 36e5, '4H': 4 * 36e5, '1D': DAY, '1W': 7 * DAY, ALL: Infinity };
 
 function homeWallet() {
@@ -567,8 +670,8 @@ function homeChart(w, v) {
     const xx = Math.min(97, Math.max(3, g.X(t)));
     return `<span class="cmark ${s.pnl >= 0 ? 'g' : 'r'}${xx > 70 ? ' rt' : xx < 30 ? ' lt' : ''}" style="left:${xx.toFixed(1)}%;top:${g.Y(near[1]).toFixed(1)}%"><i></i><b class="mono">${pctTxt(s.pct)} · ${signed(s.pnl)}</b></span>`;
   }).join('');
-  return `<div class="hchart ${up ? 'up' : 'down'}" data-hchart>
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${esc(`${money(g.first)} → ${money(g.last)}`)}"><path d="${g.d}" vector-effect="non-scaling-stroke"/></svg>
+  return `<div class="hchart ${up ? 'up' : 'down'}${S.drawChart ? ' draw' : ''}" data-hchart>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${esc(`${money(g.first)} → ${money(g.last)}`)}"><path d="${g.d}" pathLength="1" vector-effect="non-scaling-stroke"/></svg>
       <span class="cend" style="left:${g.end[0].toFixed(1)}%;top:${g.end[1].toFixed(1)}%"></span>${marks}</div>`;
 }
 
@@ -637,7 +740,7 @@ function homeScreen() {
     </header>
     <section class="hm-bal" aria-live="off">
       <h1 class="sr" tabindex="-1">${t.titles.home}</h1>
-      <p class="hm-big ${up ? 'up' : 'down'}" data-wallet-val>${money(v.value)}</p>
+      <p class="hm-big ${up ? 'up' : 'down'}" data-wv="${w.id}">${money(v.value)}</p>
       <p class="hm-sub"><span class="chg ${up ? 'up' : 'down'}"><span aria-hidden="true">${up ? '▲' : '▼'}</span> ${money(Math.abs(gain))} (${num1(Math.abs(gain / w.cash * 100))}%)</span>
         <span class="xpill mono ${up ? '' : 'down'}">${(v.value / w.cash).toFixed(2)}x</span>${v.live ? '' : ` <span class="muted small">· ${t.term.paper}</span>`}</p>
     </section>
@@ -671,7 +774,7 @@ function pickDialog() {
   return `<form method="dialog" class="sheet"><h2 id="pick-title">${t.home.pick}</h2>
     <ul class="list">${S.wallets.map(w => { const v = walletView(w); return `<li><button class="card wallet" data-act="sethome" data-v="${w.id}" data-k="sh-${w.id}">${avatar(v.bot)}
       <span class="wl-main"><span class="wl-name">${esc(botName(v.bot))}</span><span class="muted">${money(w.cash)} · ${w.bot === 'live' ? '' : ''}${dayDate(Math.floor((w.startTs ?? w.startDay * DAY) / DAY), { day: 'numeric', month: 'short' })}</span></span>
-      <span class="wl-val"><span class="wl-money">${money(v.value)}</span>${chg(v.value / w.cash - 1)}</span></button></li>`; }).join('')}</ul>
+      <span class="wl-val"><span class="wl-money" data-wv="${w.id}">${money(v.value)}</span>${chg(v.value / w.cash - 1)}</span></button></li>`; }).join('')}</ul>
     <div class="actions"><button class="btn primary" data-act="tab" data-v="bots" data-k="pick-add">+ ${t.addBot}</button><button class="btn ghost" data-act="close" data-k="pick-close">${t.cancel}</button></div></form>`;
 }
 
@@ -699,26 +802,56 @@ function confetti() {
 
 // ---------- coin page (like the video): price, candles + volume, position, risk ----------
 function coinScreen() {
-  const t = T(), cc = t.coin, c = S.coin.c, w = S.wallets.find(x => x.id === S.coin.wid) || homeWallet();
+  const t = T(), cc = t.coin, c = S.coin.c, isPaper = S.coin.wid === 'manual';
+  const w = isPaper ? null : S.wallets.find(x => x.id === S.coin.wid) || homeWallet();
   const v = w && S.mk ? walletView(w) : null, b = v?.bot;
+  const mine = isPaper && S.manual ? manualBook(S.manual)[c] : null;
   const st = deskState('coin:' + c, c, w?.bot === 'live' ? '1D' : '1M');
   st.coin = c; st.auto = false;
   const tk = S.tick[c], p = livePx(c), hold = v?.holdings?.find(x => x.c === c);
   const key = `${c}|${st.tf}`, n = v ? v.trades.filter(x => x.c === c).length : 0;
   const big = hold ? hold.gain : tk?.chg;
   const stop = b?.stop ?? LIVE.stop;
-  return `<div class="cp-top"><button class="cp-back" data-act="coinback" data-k="coinback"><span aria-hidden="true">‹</span> ${cc.back}</button><span aria-hidden="true" class="star">☆</span></div>
+  const paperCard = isPaper ? `<section class="cp-card"><span class="cp-ic">${blob('fills')}</span><div><b>${t.desk.yourPos}</b><span>${mine && mine.q > 0 ? `${qty(mine.q)} ${c} · ${price(mine.cost / mine.q)}` : fill(t.desk.noYourPos, { c })}</span></div>
+      ${mine && mine.q > 0 && p ? `<div class="r" data-pos="${c}"><b class="mono" data-pv>${money(mine.q * p)}</b><span data-pl class="mono ${mine.q * p >= mine.cost ? 'up-t' : 'down-t'}">${signed(mine.q * p - mine.cost)}</span></div>` : ''}</section>
+      <p class="muted small cp-cash">${fill(t.paper.cashLine, { usd: money(S.manual ? S.manual.cash : 0) })}</p>` : '';
+  return `<div class="cp-top"><button class="cp-back" data-act="coinback" data-k="coinback"><span aria-hidden="true">‹</span> ${isPaper ? t.tabs.trade : cc.back}</button><span aria-hidden="true" class="star">☆</span></div>
     <div class="cp-id">${coinAv(c)}<div><h1 tabindex="-1">${COIN[c] || c}</h1><p class="muted">${c} · ${fill(cc.exchange, { c })}</p></div></div>
-    <p class="cp-price" data-live-p>${p ? price(p) : '—'}</p>
-    <p class="cp-chg"><span data-live-c>${big == null ? '' : chg(big)}</span> <span class="muted">${hold ? cc.sinceEntry : cc.today}</span></p>
+    <p class="cp-price" data-px="${c}">${p ? price(p) : '—'}</p>
+    <p class="cp-chg"><span ${hold ? '' : `data-chg="${c}"`}>${big == null ? '' : chg(big)}</span> <span class="muted">${hold ? cc.sinceEntry : cc.today}</span></p>
     <div class="candles cp-c" data-candles>${S.cnd.key === key && S.cnd.rows ? drawCandles(S.cnd.rows, st, v, { vol: true, hold, stop, b }) : `<p class="muted mono cc-load">${S.cnd.err === key ? t.desk.chartError : t.desk.loadingChart}</p>`}</div>
     <div class="hm-tf" role="group" aria-label="Timeframe">${Object.keys(TF).map(k => `<button data-act="tf" data-v="${k}" data-k="tf-${k}" aria-pressed="${st.tf === k}">${k}</button>`).join('')}</div>
     <dl class="cp-grid mono" data-live-hilo2 data-n="${n}">${coinGrid(tk, n)}</dl>
-    <section class="cp-card"><span class="cp-ic">${blob('vela')}</span><div><b>${cc.position}</b><span>${hold ? `${qty(hold.value / hold.now)} ${c} · ${t.desk.trade ? '' : ''}${price(hold.entry)}` : fill(cc.noPos, { c })}</span></div>
-      ${hold ? `<div class="r"><b class="mono">${money(hold.value)}</b><span class="mono ${hold.gain >= 0 ? 'up-t' : 'down-t'}">${signed(hold.value - hold.value / (1 + hold.gain))}</span></div>` : ''}</section>
+    ${paperCard}${isPaper ? '' : `<section class="cp-card"><span class="cp-ic">${blob('vela')}</span><div><b>${cc.position}</b><span>${hold ? `${qty(hold.value / hold.now)} ${c} · ${t.desk.trade ? '' : ''}${price(hold.entry)}` : fill(cc.noPos, { c })}</span></div>
+      ${hold ? `<div class="r"><b class="mono">${money(hold.value)}</b><span class="mono ${hold.gain >= 0 ? 'up-t' : 'down-t'}">${signed(hold.value - hold.value / (1 + hold.gain))}</span></div>` : ''}</section>`}
     ${b ? `<section class="cp-card"><span class="cp-ic">${blob('risk')}</span><div><b>${b.kind === 'live' ? cc.riskTrail : cc.riskStop}</b><span>${b.kind === 'live' ? fill(cc.riskTrailTxt, { t: '2,5%'.replace(',', loc() === 'es-ES' ? ',' : '.'), a: '+5%' }) : fill(cc.riskStopTxt, { p: hold ? price(hold.entry * (1 + stop)) : '—', s: pctTxt(stop) })}</span></div>
       ${hold ? `<div class="r mono"><span class="down-t">${price(hold.entry * (1 + stop))}</span></div>` : ''}</section>` : ''}
-    <div class="bs cp-bs"><button class="b-sell" data-act="trade" data-v="sell" data-k="t-sell">${t.desk.sell}</button><button class="b-buy" data-act="trade" data-v="buy" data-k="t-buy">${t.desk.buy}</button></div>`;
+    <div class="bs cp-bs"><button class="b-sell" data-act="trade" data-v="sell" data-k="t-sell">${t.desk.sell}</button><button class="b-buy" data-act="trade" data-v="buy" data-k="t-buy">${t.desk.buy}</button></div>
+    ${isPaper ? '' : `<p class="muted small cp-cash">${t.paper.botNote}</p>`}`;
+}
+
+// ---------- paper trading: buy and sell any coin yourself at the live price ----------
+function tradeScreen() {
+  const t = T(), pt = t.paper, m = ensureManual(), book = manualBook(m), val = manualValue(m), gain = val - m.start;
+  const pos = Object.entries(book).filter(([, x]) => x.q > 0);
+  const coins = UNIVERSE;
+  return `<header class="hm-top"><p class="brand"><span class="logo-e" aria-hidden="true">E</span> ${pt.title}</p>
+      <button class="hm-ico txt" data-act="paperreset" data-k="paperreset">${pt.reset}</button></header>
+    <section class="hm-bal"><h1 class="sr" tabindex="-1">${pt.title}</h1>
+      <p class="hm-big ${gain >= 0 ? 'up' : 'down'}" data-wv="manual">${money(val)}</p>
+      <p class="hm-sub"><span class="chg ${gain >= 0 ? 'up' : 'down'}"><span aria-hidden="true">${gain >= 0 ? '▲' : '▼'}</span> ${money(Math.abs(gain))} (${num1(Math.abs(gain / m.start * 100))}%)</span>
+        <span class="muted small">· ${fill(pt.cashLine, { usd: money(m.cash) })}</span></p></section>
+    <section class="hm-sec"><div class="hm-h"><h2>${pt.positions}</h2></div>
+      ${pos.length ? `<ul class="act">${pos.map(([c, x]) => { const p = livePx(c) || 0, v2 = x.q * p, pl = v2 - x.cost; return `<li><button class="act-r" data-act="coinpage" data-v="${c}|manual" data-k="pos-${c}">
+        <span class="act-av">${coinAv(c)}</span><span class="act-m"><b>${COIN[c] || c}</b><span class="mono">${qty(x.q)} ${c} · ${price(x.cost / x.q)}</span></span>
+        <span class="act-v" data-pos="${c}"><b class="mono" data-pv>${money(v2)}</b><span data-pl class="mono ${pl >= 0 ? 'up-t' : 'down-t'}">${signed(pl)} · ${pctTxt(pl / x.cost)}</span></span></button></li>`; }).join('')}</ul>`
+        : `<p class="muted small hm-empty">${pt.noPos}</p>`}</section>
+    <section class="hm-sec"><div class="hm-h"><h2>${pt.markets}</h2><span class="livetag mono"><i class="dot" aria-hidden="true"></i>LIVE</span></div>
+      <ul class="act mkts">${coins.map(c => { const tk = S.tick[c], p = livePx(c); return `<li><button class="act-r" data-act="coinpage" data-v="${c}|manual" data-k="mk-${c}">
+        <span class="act-av">${coinAv(c)}</span><span class="act-m"><b>${COIN[c] || c}</b><span class="mono">${c}</span></span>
+        <span class="spark" data-spark="${c}">${sparkPath(c)}</span>
+        <span class="act-v"><b class="mono" data-px="${c}">${p ? price(p) : '—'}</b><span data-chg="${c}">${tk ? chg(tk.chg) : ''}</span></span></button></li>`; }).join('')}</ul></section>
+    <p class="muted small">${pt.note}</p>`;
 }
 const coinGrid = (tk, n) => { const cc = T().coin; return tk ? `<div><dt>${cc.vol}</dt><dd>$${new Intl.NumberFormat(loc(), { notation: 'compact', maximumFractionDigits: 1 }).format(tk.vol)}</dd></div><div><dt>${cc.hi}</dt><dd>${price(tk.hi)}</dd></div><div><dt>${cc.lo}</dt><dd>${price(tk.lo)}</dd></div><div><dt>${cc.botTrades}</dt><dd>${n}</dd></div>` : ''; };
 
@@ -734,7 +867,7 @@ async function pollHome() {
   if (big) big.textContent = money(v2.value);
   if (ch) ch.outerHTML = homeChart(w, v2);
 }
-setInterval(pollHome, 10e3);
+
 
 function botsScreen() {
   const t = T();
@@ -829,20 +962,17 @@ function setupDialog() {
   if (!b) return '';
   const amt = S.setup.amt, st = S.setup.start;
   if (b.kind === 'live') {
-    const ls = [0, 1, 3, 7].includes(st) ? st : 1;
     return `<form method="dialog" class="sheet">
     <div class="row">${avatar(b, true)}<div><p class="muted">${t.setupTitle}</p><h2 id="setup-title">${botName(b)}</h2></div></div>
     <p class="label">${t.amount}</p>${chips('amt', [100, 500, 1000, 10000].map(v => [v, money(v)]), amt, t.amount)}
-    <p class="label">${t.startWhen}</p>${chips('start', [0, 1, 3, 7].map(v => [v, t.live.startOpts[v]]), ls, t.startWhen)}
-    <p class="muted">${ls ? t.live.pastHint : t.live.nowHint}</p>
+    <p class="muted">${t.live.nowHint}</p>
     <div class="actions"><button class="btn primary" value="ok" data-act="create" data-k="create">${t.startBtn}</button>
     <button class="btn ghost" value="cancel" data-act="close" data-k="cancel">${t.cancel}</button></div></form>`;
   }
   return `<form method="dialog" class="sheet">
     <div class="row">${avatar(b, true)}<div><p class="muted">${t.setupTitle}</p><h2 id="setup-title">${botName(b)}</h2></div></div>
     <p class="label">${t.amount}</p>${chips('amt', [100, 500, 1000, 10000].map(v => [v, money(v)]), amt, t.amount)}
-    <p class="label">${t.startWhen}</p>${chips('start', [0, 30, 90, 180].map(v => [v, t.startOpts[v]]), st, t.startWhen)}
-    <p class="muted">${st ? t.startHint : fill(t.tonightHint, { t: nextCloseText() })}</p>
+    <p class="muted">${fill(t.tonightHint, { t: nextCloseText() })} ${t.home.pastTip}</p>
     <div class="actions"><button class="btn primary" value="ok" data-act="create" data-k="create">${t.startBtn}</button>
     <button class="btn ghost" value="cancel" data-act="close" data-k="cancel">${t.cancel}</button></div></form>`;
 }
@@ -861,6 +991,7 @@ function confirmDialog() {
 
 // ---------- render ----------
 function render(focusTop) {
+  S.drawChart = !!focusTop;
   const t = T(), html = document.documentElement;
   html.lang = S.set.lang;
   html.dataset.theme = S.set.theme;
@@ -876,9 +1007,9 @@ function render(focusTop) {
     $('#tabs').hidden = true;
   } else {
     $('#tabs').hidden = !!S.view;
-    const noHead = S.view || S.coin || S.tab === 'home';
+    const noHead = S.view || S.coin || S.tab === 'home' || S.tab === 'trade';
     const title = noHead ? '' : `<header class="top"><p class="brand"><span class="logo-e" aria-hidden="true">E</span> EME Bots</p><h1 tabindex="-1">${t.titles[S.tab]}</h1></header>`;
-    const body = S.coin ? coinScreen() : S.view ? deskScreen(S.view) : { home: homeScreen, practice, bots: botsTab, activity: activityScreen, test: testScreen, settings: settingsScreen }[S.tab]();
+    const body = S.coin ? coinScreen() : S.view ? deskScreen(S.view) : { home: homeScreen, trade: tradeScreen, practice, bots: botsTab, activity: activityScreen, test: testScreen, settings: settingsScreen }[S.tab]();
     $('#app').innerHTML = title + `<div class="content">${body}</div>`;
     $('#app').classList.toggle('wide', !!S.view);
     const agt = document.querySelector('[data-agtrack]');
@@ -898,9 +1029,9 @@ function render(focusTop) {
       }, { passive: true });
     }
     const cur = ['test', 'practice'].includes(S.tab) ? 'bots' : S.tab;
-    $('#tabs').innerHTML = ['home', 'bots', 'activity', 'settings'].map(id =>
+    $('#tabs').innerHTML = ['home', 'trade', 'bots', 'activity', 'settings'].map(id =>
       `<button data-act="tab" data-v="${id}" data-k="tab-${id}" ${cur === id ? 'aria-current="page"' : ''}>${ICON[id]}<span>${t.tabs[id]}</span></button>`).join('');
-    $('#app').classList.toggle('home', !S.view && !S.coin && S.tab === 'home');
+    $('#app').classList.toggle('home', !S.view && !S.coin && (S.tab === 'home' || S.tab === 'trade'));
   }
   const setup = $('#setup'), conf = $('#confirm'), trd = $('#trade'), pick = $('#pick');
   setup.innerHTML = setupDialog(); conf.innerHTML = confirmDialog(); trd.innerHTML = tradeDialog(); pick.innerHTML = pickDialog();
@@ -917,6 +1048,8 @@ function render(focusTop) {
   if (S.confirm && !conf.open) conf.showModal();
   if (!S.confirm && conf.open) conf.close();
 
+  S.drawChart = false;
+  if (focusTop && !matchMedia('(prefers-reduced-motion: reduce)').matches) { const a = $('#app'); a.classList.remove('enter'); void a.offsetWidth; a.classList.add('enter'); }
   const again = k && document.querySelector(`[data-k="${k}"]`);
   if (focusTop) (document.querySelector('#app h1, #app h2, #app .back'))?.focus?.();
   else if (again) again.focus();
@@ -924,6 +1057,7 @@ function render(focusTop) {
 
 const ICON = {
   home: '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/></svg>',
+  trade: '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 4v16M4 7l3-3 3 3M17 20V4M14 17l3 3 3-3"/></svg>',
   activity: '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>',
   practice: '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 18l5-6 4 3 7-9"/><path d="M15 6h5v5"/></svg>',
   bots: '<svg aria-hidden="true" viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01"/></svg>',
@@ -941,7 +1075,8 @@ const ACT = {
     w.st = newLiveState(w.cash, w.startTs); S.wallets.push(w); saveWallets(); S.set.home = w.id; S.set.homeTf = null; saveSet(); S.liveAt = 0; render(true); runLive(true);
   },
   coinpage(v) { const [c, wid] = v.split('|'); S.coin = { c, wid }; render(true); scrollTo(0, 0); },
-  coinback() { S.coin = null; render(true); },
+  coinback() { if (S.coin?.wid === 'manual') S.tab = 'trade'; S.coin = null; render(true); },
+  paperreset() { S.confirm = { text: T().paper.resetConfirm, yes: T().paper.reset, run: () => { S.manual = { cash: 10000, start: 10000, fills: [], created: Date.now() }; store.set('manual', S.manual); } }; render(); },
   tab(v) { S.tab = v; S.view = null; S.coin = null; S.picking = false; render(true); scrollTo(0, 0); },
   open(v) { S.view = v; render(true); scrollTo(0, 0); },
   back() { S.view = null; render(true); },
@@ -951,10 +1086,10 @@ const ACT = {
   start(v) { S.setup.start = +v; render(); },
   create() {
     const today = Math.floor(Date.now() / DAY); // the day whose close is next
-    const isLive = S.setup.bot === 'live', ls = [0, 1, 3, 7].includes(S.setup.start) ? S.setup.start : 1;
+    const isLive = S.setup.bot === 'live';  // every bot starts now, on live prices
     const w = isLive
-      ? { id: Math.random().toString(36).slice(2, 9), bot: 'live', cash: S.setup.amt, startTs: Date.now() - ls * DAY, created: Date.now() }
-      : { id: Math.random().toString(36).slice(2, 9), bot: S.setup.bot, cash: S.setup.amt, startDay: today - S.setup.start, created: Date.now() };
+      ? { id: Math.random().toString(36).slice(2, 9), bot: 'live', cash: S.setup.amt, startTs: Date.now(), created: Date.now() }
+      : { id: Math.random().toString(36).slice(2, 9), bot: S.setup.bot, cash: S.setup.amt, startDay: today, created: Date.now() };
     if (isLive) w.st = newLiveState(w.cash, w.startTs);
     S.wallets.push(w); saveWallets();
     S.setup.bot = null; S.tab = 'home'; S.view = null; S.coin = null; S.set.home = w.id; S.set.homeTf = null; saveSet(); render(true); scrollTo(0, 0);
@@ -1016,5 +1151,5 @@ document.addEventListener('visibilitychange', () => {
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => render());
 
 render(true);
-refresh();
+refresh().then(startStream);
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
