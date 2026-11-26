@@ -70,6 +70,13 @@ export const STR = {
     },
     tabs: { home: 'Inicio', trade: 'Operar', practice: 'Práctica', bots: 'Bots', activity: 'Actividad', test: 'Probar', settings: 'Cuenta' },
     titles: { home: 'Inicio', trade: 'Operar', practice: 'Tu práctica', bots: 'Bots', activity: 'Actividad', test: 'Máquina del tiempo', settings: 'Cuenta' },
+    show: {
+      scan: 'ESCANEO', scanning: 'escaneando…', passes: 'pasa', filtered: 'FILTRADA', live: 'En directo', executing: 'Ejecutando…', watching: 'vigilando',
+      why: { btc: 'BTC bajo su media', avg: 'bajo su media', hour: 'cae en la última hora', move: 'subida muy floja', trend: 'tendencia débil' },
+      feedScan: '{c} a {p} · {m} en {w}', feedPass: '{c}: {s}/100. Pasa todos los filtros.', feedSkip: '{c}: {s}/100. Fuera: {why}.',
+      feedRisk: '{c} está {d} sobre el freno ({p}).', feedWait: 'Sin posición. Esperando a una moneda que pase todo.',
+      riskDist: '{d} sobre el freno', note: 'Esto es lo que los agentes comprueban ahora mismo con el precio en directo. Que una moneda "pase" no es una compra: el bot compra cuando le toca revisar.',
+    },
     paper: {
       title: 'Paper trading', reset: 'Reiniciar', resetConfirm: '¿Volver a empezar con 10.000 $ de práctica? Se borran tus operaciones.',
       positions: 'Tus posiciones', markets: 'Mercados', noPos: 'Aún no tienes nada. Toca una moneda y pulsa Comprar.',
@@ -272,6 +279,13 @@ export const STR = {
     },
     tabs: { home: 'Home', trade: 'Trade', practice: 'Practice', bots: 'Bots', activity: 'Activity', test: 'Test', settings: 'Account' },
     titles: { home: 'Home', trade: 'Trade', practice: 'Your practice', bots: 'Bots', activity: 'Activity', test: 'Time machine', settings: 'Account' },
+    show: {
+      scan: 'SCAN', scanning: 'scanning…', passes: 'passes', filtered: 'FILTERED', live: 'Live', executing: 'Executing…', watching: 'watching',
+      why: { btc: 'BTC under its average', avg: 'under its average', hour: 'falling in the last hour', move: 'move too weak', trend: 'weak trend' },
+      feedScan: '{c} at {p} · {m} in {w}', feedPass: '{c}: {s}/100. Passes every filter.', feedSkip: '{c}: {s}/100. Out: {why}.',
+      feedRisk: '{c} is {d} above the stop ({p}).', feedWait: 'No position. Waiting for a coin that passes everything.',
+      riskDist: '{d} above the stop', note: 'This is what the agents are checking right now on the live price. A coin that "passes" isn’t a buy: the bot buys at its own check time.',
+    },
     paper: {
       title: 'Paper trading', reset: 'Reset', resetConfirm: 'Start over with $10,000 of practice money? Your trades will be deleted.',
       positions: 'Your positions', markets: 'Markets', noPos: 'Nothing yet. Tap a coin and press Buy.',

@@ -16,7 +16,7 @@ const S = {
   tab: 'home', view: null, coin: null, picking: false, livePts: {},
   set: { lang: (navigator.language || 'es').startsWith('es') ? 'es' : 'en', theme: 'terminal', size: 1, onboarded: false, ...store.get('settings', {}) },
   wallets: store.get('wallets', []),
-  spark: {}, manual: store.get('manual', null), desk: {}, cnd: {}, tick: {}, trade: null, cndReq: null, lbars: {}, liveAt: 0, liveBusy: false,
+  spark: {}, feed: {}, bins: {}, manual: store.get('manual', null), desk: {}, cnd: {}, tick: {}, trade: null, cndReq: null, lbars: {}, liveAt: 0, liveBusy: false,
   mk: null, loading: false, error: null,
   test: { bot: 'momentum', period: 1095 },
   setup: { bot: null, amt: 1000, start: 30 },
@@ -145,6 +145,7 @@ function startStream() {
   });
 }
 function notifyTrade(x) {
+  S.lastTradeAt = Date.now();
   toast(fill(T().live.toast[x.side], { b: T().live.name, c: x.c, p: price(x.p), pnl: x.pnl == null ? '' : signed(x.pnl) }));
 }
 function onLiveTick() {
@@ -171,6 +172,11 @@ async function loadSparks() {
   sparkAt = Date.now();
   await Promise.all(UNIVERSE.map(async c => { try { S.spark[c] = (await candles(c, '1D')).filter((_, k, a) => k % 4 === 3 || k === a.length - 1).map(r => r.c); } catch { } }));
   for (const el of document.querySelectorAll('[data-spark]')) el.innerHTML = sparkPath(el.dataset.spark);
+  const rt = document.querySelector('[data-risktxt]');
+  if (rt) {
+    const p = livePx(rt.dataset.c), sp = +rt.dataset.stop, en = +rt.dataset.entry;
+    if (p) { rt.textContent = fill(T().show.riskDist, { d: pctTxt(p / sp - 1) }); const f = document.querySelector('[data-riskfill]'); if (f) f.style.width = Math.max(3, Math.min(100, (p - sp) / (en - sp) * 50)) + '%'; }
+  }
 }
 function sparkPath(c) {
   const d = S.mk?.d, s = d?.px[c]; if (!s && !S.spark[c]) return '';
@@ -184,6 +190,10 @@ function flash(el, up) { el.classList.remove('fu', 'fd'); void el.offsetWidth; e
 function rollTo(el, v) {
   const from = el._v ?? v; el._v = v;
   if (Math.abs(from - v) < 0.005) { el.textContent = money(v); return; }
+  if (el.classList.contains('hm-big') && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const b = document.createElement('span'); b.className = 'bub mono ' + (v >= from ? 'up' : 'down'); b.textContent = signed(v - from);
+    b.style.left = (40 + Math.random() * 45) + '%'; el.parentElement.append(b); setTimeout(() => b.remove(), 1700);
+  }
   flash(el, v >= from);
   const t0 = performance.now(), dur = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 450;
   const step = t => { const k = dur ? Math.min(1, (t - t0) / dur) : 1; el.textContent = money(from + (v - from) * (1 - (1 - k) ** 3)); if (k < 1) requestAnimationFrame(step); };
@@ -697,11 +707,12 @@ function agentCards(w, v) {
   const ts = tradeStats(v.trades), lastBuy = [...v.trades].reverse().find(x => x.side === 'buy'), lastSell = ts.last, hold = v.holdings[0];
   const stop = b.stop ?? -0.25, card = (k, who, dot, body) => `<li class="agc"><div class="agc-h">${blob(k)}<div><b>${names[k]}</b><span><i class="${dot}"></i>${who}</span></div></div>${body}</li>`;
   const cards = [
-    card('scanner', fill(a.scanner, { n: e.coins.length }), 'g', `<ul class="agc-l mono">${[byMove[0], byMove[1]].filter(Boolean).map(c => `<li><span>${c.c}</span><b class="up-t">${pctTxt(c.ret30)}</b></li>`).join('')}${worst && worst !== top ? `<li><span>${worst.c}</span><b class="down-t">${pctTxt(worst.ret30)}</b></li>` : ''}</ul>`),
-    card('analyst', a.analyst, 'y', top ? `<div class="ring" style="--p:${score}"><b class="mono">${score}</b></div><p class="agc-c">${coinAv(top.c, true)} <b>${top.c}</b><br><span>${score >= 75 ? a.passed : a.scoring}</span></p>` : ''),
+    card('scanner', fill(a.scanner, { n: e.coins.length }), 'g', `<div class="scanbar" aria-hidden="true"><i></i></div><p class="agc-c mono" data-scan-now>${t.show.scanning}</p><ul class="agc-l mono" data-scan-list>${[byMove[0], byMove[1]].filter(Boolean).map(c => `<li><span>${c.c}</span><b class="up-t">${pctTxt(c.ret30)}</b></li>`).join('')}${worst && worst !== top ? `<li><span>${worst.c}</span><b class="down-t">${pctTxt(worst.ret30)}</b></li>` : ''}</ul>`),
+    card('analyst', a.analyst, 'y', top ? `<div class="ring" data-ring style="--p:${score}"><b class="mono" data-ring-n>${score}</b></div><p class="agc-c"><span data-ring-c>${coinAv(top.c, true)} <b>${top.c}</b></span><br><span data-ring-s>${score >= 75 ? a.passed : a.scoring}</span></p>` : ''),
     card('fills', fill(a.executor, { n: v.trades.length }), 'p', lastBuy ? `<p class="agc-c">${coinAv(lastBuy.c, true)} <b>${lastBuy.c}</b><br><span class="mono">${money(lastBuy.usd)} · ${b.kind === 'live' ? fill(t.home.ofStack, { n: 98 }) : fill(t.home.at, { p: price(lastBuy.p) })}</span></p>
-      <p class="agc-bar ${hold ? 'on' : ''}">${hold ? '✓ ' + a.filled : a.waiting}</p>` : `<p class="agc-bar">${a.waiting}</p>`),
+      ${execBar(hold)}` : execBar(hold)),
     card('risk', hold ? a.risk : a.riskIdle, hold ? 'o' : 'x', `<p class="agc-c">${hold ? fill(a.stopAt, { c: hold.c, p: price(hold.entry * (1 + stop)) }) : lastSell ? fill(a.trailed, { c: lastSell.c, p: signed(lastSell.pnl) }) : a.noExit}</p>
+      ${hold ? `<div class="rbar" aria-hidden="true"><i data-riskfill style="width:50%"></i></div><p class="agc-c mono" data-risktxt data-c="${hold.c}" data-stop="${hold.entry * (1 + stop)}" data-entry="${hold.entry}"></p>` : ''}
       <p class="chips2 mono"><span class="r">${fill(a.stopChip, { s: pctTxt(stop) })}</span>${b.kind === 'live' ? `<span class="g">${fill(a.trailChip, { s: '+' + Math.round(LIVE.trailAt * 100) + '%' })}</span>` : ''}</p>`),
     card('market', a.market, e.btcUp ? 'g' : 'r', `<p class="agc-big mono ${e.btcUp ? 'up-t' : 'down-t'}">${e.btcAvg ? pctTxt(e.btc / e.btcAvg - 1) : '—'}</p><p class="agc-c">BTC ${e.btc ? price(e.btc) : ''}</p>`),
     card('sizer', fill(a.sizer, { n: b.kind === 'live' ? 98 : b.pick ? Math.round(100 / b.pick) : 100 }), 'b', `<p class="agc-big mono">${money(v.cash)}</p><p class="agc-c">${t.cash}</p>`),
@@ -709,6 +720,84 @@ function agentCards(w, v) {
   ];
   return cards;
 }
+
+function execBar(hold) {
+  const a = T().home.ag, t = T().show;
+  if (Date.now() - (S.lastTradeAt || 0) < 6000) return `<p class="agc-bar exec"><i aria-hidden="true"></i><span>${t.executing}</span></p>`;
+  return `<p class="agc-bar ${hold ? 'on' : 'watch'}">${hold ? '✓ ' + a.filled : `<span class="dots3" aria-hidden="true"><i></i><i></i><i></i></span> ${t.watching}`}</p>`;
+}
+
+// ---------- the live show: the bot checks one coin after another on the live price ----------
+function evalCoin(b, c) {
+  const p = livePx(c); if (!p || !S.mk) return null;
+  let checks, move;
+  if (b.kind === 'live') {
+    const bars = S.lbars[c], bb = S.lbars.BTC;
+    if (!bars?.length || !bb?.length) return null;
+    const mean = (arr, px) => { const sl = arr.slice(-(LIVE.avg - 1)).map(x => x.c); sl.push(px); return sl.reduce((s2, x) => s2 + x, 0) / sl.length; };
+    const btcP = livePx('BTC') ?? bb[bb.length - 1].c, r = p / bars[bars.length - LIVE.look].c - 1, r1 = p / bars[bars.length - 4].c - 1;
+    checks = [[btcP > mean(bb, btcP), 'btc'], [p > mean(bars, p), 'avg'], [r1 > 0, 'hour'], [r > LIVE.minMove, 'move']];
+    move = r;
+  } else {
+    const e = cached(`e|${b.id}|${S.mk.at}`, () => explain(b, S.mk.d)), x = e.coins.find(k => k.c === c);
+    if (!x) return null;
+    const d = S.mk.d, sr = d.px[c], last = d.dates.length - 1, past = sr?.[last - 29];
+    move = past ? p / past - 1 : x.ret30;
+    checks = [...(b.pick ? [[e.btcUp, 'btc']] : []), [x.avg200 ? p > x.avg200 : !!x.up200, 'avg'], [x.up2050 ?? true, 'trend'], [(move ?? 0) > 0, 'move']];
+  }
+  const passed = checks.filter(k => k[0]).length;
+  return { c, p, move, score: Math.round(passed / checks.length * 100), pass: passed === checks.length, why: checks.find(k => !k[0])?.[1] };
+}
+let scanK = 0;
+function scanTick() {
+  if (document.hidden || S.view || S.coin || S.tab !== 'home' || !S.mk) return;
+  const w = homeWallet(); if (!w) return;
+  const b = walletView(w).bot, coins = b.coins || UNIVERSE, sh = T().show;
+  let ev = null;
+  for (let tries = 0; tries < coins.length && !ev; tries++) ev = evalCoin(b, coins[scanK++ % coins.length]);
+  if (!ev) return;
+  const motion = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const now = document.querySelector('[data-scan-now]');
+  if (now) { now.innerHTML = `${coinAv(ev.c, true)} <b>${ev.c}</b> ${price(ev.p)} <span class="${(ev.move ?? 0) >= 0 ? 'up-t' : 'down-t'}">${ev.move == null ? '' : pctTxt(ev.move)}</span>`; }
+  const ring = document.querySelector('[data-ring]');
+  if (ring) {
+    ring.style.setProperty('--p', ev.score);
+    document.querySelector('[data-ring-n]').textContent = ev.score;
+    document.querySelector('[data-ring-c]').innerHTML = `${coinAv(ev.c, true)} <b>${ev.c}</b>`;
+    const st = document.querySelector('[data-ring-s]'); st.textContent = ev.pass ? sh.passes : sh.why[ev.why] || ''; st.className = ev.pass ? 'up-t' : 'down-t';
+    if (motion) { ring.classList.remove('spin'); void ring.offsetWidth; ring.classList.add('spin'); }
+  }
+  const brain = document.querySelector('[data-brain]');
+  if (brain) {
+    const cap = brain.querySelector('[data-bcap]');
+    const land = () => {
+      const k = ev.pass ? 'pick' : 'skip', el = brain.querySelector(`[data-bin-${k}]`);
+      S.bins[k] = (S.bins[k] || 0) + 1; if (el) { el.textContent = S.bins[k]; flash(el, ev.pass); }
+      if (cap) cap.innerHTML = `<b>${ev.c}</b> · ${ev.score}/100 · <span class="${ev.pass ? 'up-t' : 'down-t'}">${ev.pass ? sh.passes.toUpperCase() : sh.filtered}</span>`;
+    };
+    if (motion) {
+      const fly = document.createElement('span');
+      fly.className = 'b-fly ' + (ev.pass ? 'go-pick' : 'go-skip'); fly.innerHTML = coinAv(ev.c);
+      brain.append(fly); setTimeout(land, 1100); setTimeout(() => fly.remove(), 1700);
+    } else land();
+  }
+  // live feed: what the agents are doing right now
+  const msgs = [{ who: 'scanner', text: fill(sh.feedScan, { c: ev.c, p: price(ev.p), m: ev.move == null ? '—' : pctTxt(ev.move), w: b.kind === 'live' ? '12h' : '30d' }) },
+    { who: 'analyst', text: fill(ev.pass ? sh.feedPass : sh.feedSkip, { c: ev.c, s: ev.score, why: sh.why[ev.why] || '' }) }];
+  const v = walletView(w), hold = v.holdings[0];
+  if (hold && scanK % 3 === 0) { const sp = hold.entry * (1 + (b.stop ?? LIVE.stop)); msgs.push({ who: 'risk', text: fill(sh.feedRisk, { c: hold.c, d: pctTxt(hold.now / sp - 1), p: price(sp) }) }); }
+  if (!hold && scanK % 5 === 0) msgs.push({ who: 'vela', text: sh.feedWait });
+  const feed = S.feed[w.id] ||= [];
+  for (const m of msgs) feed.unshift({ ...m, ts: Date.now() });
+  feed.length = Math.min(feed.length, 24);
+  const ol = document.querySelector('[data-feed]');
+  if (ol) {
+    for (const m of msgs.slice().reverse()) { const li = document.createElement('li'); li.className = 'msg' + (motion ? ' pop' : ''); li.style.setProperty('--i', 0); li.innerHTML = feedItem(m); ol.prepend(li); }
+    while (ol.children.length > 8) ol.lastElementChild.remove();
+  }
+}
+const feedItem = m => `${blob(m.who)}<div><b>${T().chat.names[m.who]} <time class="mono">${new Date(m.ts || Date.now()).toLocaleTimeString(loc(), { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time></b><p>${esc(m.text)}</p></div>`;
+setInterval(scanTick, 1800);
 
 function actRows(trades, opts = {}) {
   const t = T(), h = t.home, names = t.chat.names;
@@ -758,9 +847,20 @@ function homeScreen() {
     </section>
     ${homeChart(w, v)}
     <div class="hm-tf" role="group" aria-label="Range">${Object.keys(RANGES).map(k => `<button data-act="htf" data-v="${k}" data-k="htf-${k}" aria-pressed="${homeTf(w) === k}">${k === 'LIVE' ? '<i class="dot" aria-hidden="true"></i>LIVE' : k}</button>`).join('')}</div>
+    <section class="brain" data-brain aria-hidden="true">
+      <div class="b-lane"></div>
+      <div class="b-in mono">${t.show.scan}</div>
+      <div class="b-core"><span class="logo-e">E</span><i></i><i></i></div>
+      <div class="b-bin b-pick"><b class="mono" data-bin-pick>${S.bins.pick || 0}</b><span class="mono">${t.show.passes.toUpperCase()}</span></div>
+      <div class="b-bin b-skip"><b class="mono" data-bin-skip>${S.bins.skip || 0}</b><span class="mono">${t.show.filtered}</span></div>
+      <p class="b-cap mono" data-bcap>${t.show.scanning}</p>
+    </section>
     <section class="hm-sec"><div class="hm-h"><h2>${h.agents}</h2><span class="muted">${fill(h.running, { n: cards.length })}</span></div>
       <ul class="ag-track" data-agtrack>${cards.join('')}</ul>
       <div class="ag-dots" aria-hidden="true">${cards.map((_, k) => `<i class="${k ? '' : 'on'}"></i>`).join('')}</div></section>
+    <section class="hm-sec"><div class="hm-h"><h2>${t.show.live}</h2><span class="livetag mono"><i class="dot" aria-hidden="true"></i>LIVE</span></div>
+      <ol class="chat feed" data-feed>${(S.feed[w.id] || []).slice(0, 8).map(m => `<li class="msg">${feedItem(m)}</li>`).join('')}</ol>
+      <p class="muted small">${t.show.note}</p></section>
     <section class="hm-sec"><div class="hm-h"><h2>${h.activity}</h2><button class="link" data-act="tab" data-v="activity" data-k="see-all">${h.seeAll}</button></div>
       ${actRows(tradesOf(w, v), { limit: 12 })}</section>`;
 }

@@ -638,3 +638,69 @@ body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter"
 @keyframes rowDown { 0% { background: rgb(255 77 94 / .16); } }
 .tick { display: inline-block; width: 1em; font-size: .7em; margin-right: 2px; vertical-align: middle; }
 @media (prefers-reduced-motion: reduce) { .act-r.rfu, .act-r.rfd { animation: none; } }
+
+/* ---------- v0.8 live show ---------- */
+.hm-bal { position: relative; }
+.bub { position: absolute; top: 18px; font-weight: 800; font-size: .95rem; padding: 2px 8px; border-radius: 999px; pointer-events: none; animation: bubUp 1.6s ease-out forwards; }
+.bub.up { color: #021208; background: #22D47E; } .bub.down { color: #fff; background: #FF4D5E; }
+@keyframes bubUp { 0% { opacity: 0; transform: translateY(14px) scale(.8); } 15% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-46px); } }
+
+.brain { position: relative; height: 170px; margin: 6px 0 4px; border-radius: 22px; background: radial-gradient(120% 90% at 50% 50%, #0B1A12 0%, #050806 70%); border: 1px solid #12251A; overflow: hidden; }
+.b-lane { position: absolute; left: 12%; right: 16%; top: 50%; height: 2px; margin-top: -1px; background: repeating-linear-gradient(90deg, #22D47E 0 8px, transparent 8px 16px); opacity: .35; animation: lane 1s linear infinite; }
+@keyframes lane { to { background-position: 16px 0; } }
+.b-in { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: .7rem; font-weight: 800; letter-spacing: .1em; color: #4FD8FF; writing-mode: vertical-rl; rotate: 180deg; }
+.b-core { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; display: grid; place-items: center; }
+.b-core .logo-e { width: 54px; height: 54px; border-radius: 16px; font-size: 1.8rem; position: relative; z-index: 1; box-shadow: 0 0 24px rgb(34 232 136 / .6); }
+.b-core i { position: absolute; inset: -6px; border-radius: 22px; border: 2px solid #22D47E; opacity: 0; animation: corePulse 1.8s ease-out infinite; }
+.b-core i + i { animation-delay: .9s; }
+@keyframes corePulse { 0% { opacity: .7; transform: scale(.85); } 100% { opacity: 0; transform: scale(1.5); } }
+.b-bin { position: absolute; right: 12px; width: 82px; padding: 6px 8px; border-radius: 14px; text-align: center; display: grid; }
+.b-bin.b-pick { top: 14px; background: rgb(34 212 126 / .12); border: 1px solid rgb(34 212 126 / .45); }
+.b-bin.b-skip { bottom: 30px; background: rgb(255 77 94 / .1); border: 1px solid rgb(255 77 94 / .4); }
+.b-bin b { font-size: 1.15rem; } .b-bin span { font-size: .6rem; letter-spacing: .08em; color: #8E95A3; }
+.b-bin.b-pick b { color: #22D47E; } .b-bin.b-skip b { color: #FF4D5E; }
+.b-cap { position: absolute; left: 0; right: 0; bottom: 6px; text-align: center; font-size: .72rem; color: #8E95A3; margin: 0; }
+.b-cap b { color: #fff; }
+.b-fly { position: absolute; left: 6%; top: 50%; margin-top: -20px; z-index: 2; }
+.b-fly .cav { box-shadow: 0 0 16px rgb(255 255 255 / .25); }
+.b-fly.go-pick { animation: flyPick 1.6s cubic-bezier(.4, 0, .2, 1) forwards; }
+.b-fly.go-skip { animation: flySkip 1.6s cubic-bezier(.4, 0, .2, 1) forwards; }
+@keyframes flyPick {
+  0% { left: 4%; opacity: 0; transform: scale(.6); } 12% { opacity: 1; transform: scale(1); }
+  42% { left: calc(50% - 20px); top: 50%; transform: scale(1.1) rotate(0); } 55% { left: calc(50% - 20px); top: 50%; transform: scale(.9) rotate(180deg); }
+  88% { left: calc(100% - 72px); top: 26%; opacity: 1; transform: scale(.8) rotate(360deg); } 100% { left: calc(100% - 72px); top: 26%; opacity: 0; transform: scale(.4); }
+}
+@keyframes flySkip {
+  0% { left: 4%; opacity: 0; transform: scale(.6); } 12% { opacity: 1; transform: scale(1); }
+  42% { left: calc(50% - 20px); top: 50%; transform: scale(1.1) rotate(0); } 55% { left: calc(50% - 20px); top: 50%; transform: scale(.9) rotate(-180deg); }
+  88% { left: calc(100% - 72px); top: 70%; opacity: 1; transform: scale(.8) rotate(-360deg); } 100% { left: calc(100% - 72px); top: 70%; opacity: 0; transform: scale(.4); }
+}
+.scanbar { height: 3px; border-radius: 2px; background: #22262D; overflow: hidden; }
+.scanbar i { display: block; width: 35%; height: 100%; background: linear-gradient(90deg, transparent, #19C9A5, transparent); animation: scan 1.8s ease-in-out infinite; }
+@keyframes scan { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+[data-scan-now] { min-height: 22px; }
+.ring { transition: background .5s; }
+.ring.spin { animation: ringPop .6s ease-out; }
+@keyframes ringPop { 0% { transform: scale(.85) rotate(-90deg); } 100% { transform: scale(1) rotate(0); } }
+.rbar { height: 6px; border-radius: 3px; background: rgb(255 77 94 / .25); overflow: hidden; margin-top: auto; }
+.rbar i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #FF4D5E, #FFC24B, #22D47E); transition: width .6s; }
+.agc-bar.exec { position: relative; overflow: hidden; color: #fff; background: #2A1E4A; }
+.agc-bar.exec i { position: absolute; inset: 0; width: 0; background: rgb(155 124 255 / .55); animation: exec 1.4s ease-out forwards; }
+.agc-bar.exec span { position: relative; }
+@keyframes exec { to { width: 100%; } }
+.agc-bar.watch { color: #C9CED8; }
+.dots3 { display: inline-flex; gap: 3px; vertical-align: middle; margin-right: 4px; }
+.dots3 i { width: 5px; height: 5px; border-radius: 50%; background: #22D47E; animation: dot3 1.2s ease-in-out infinite; }
+.dots3 i:nth-child(2) { animation-delay: .2s; } .dots3 i:nth-child(3) { animation-delay: .4s; }
+@keyframes dot3 { 0%, 100% { opacity: .25; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-3px); } }
+.feed { gap: 12px; }
+.feed .msg { gap: 10px; }
+.feed .blob { width: 38px; height: 38px; }
+.feed .msg b { font-size: .95rem; color: #fff; }
+.feed .msg p { font-size: .88rem; color: #AEB6C6; margin: 1px 0 0; }
+.feed .msg time { font-size: .68rem; color: #6C7380; margin-left: 6px; font-weight: 500; }
+.feed .msg.pop { animation: pop .45s cubic-bezier(.2, .9, .3, 1.2) both; }
+@media (prefers-reduced-motion: reduce) {
+  .b-lane, .b-core i, .scanbar i, .dots3 i, .ring.spin, .agc-bar.exec i, .feed .msg.pop, .bub { animation: none !important; }
+  .agc-bar.exec i { width: 100%; }
+}
