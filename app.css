@@ -633,3 +633,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter"
   .blob .eyes, .agc .blob, .msg.pop .blob, .cp-ic .blob, .fu, .fd, #app.enter > * { animation: none !important; }
   .hchart.draw path { animation: none; stroke-dashoffset: 0; }
 }
+.act-r.rfu { animation: rowUp .9s ease-out; } .act-r.rfd { animation: rowDown .9s ease-out; }
+@keyframes rowUp { 0% { background: rgb(34 212 126 / .16); } }
+@keyframes rowDown { 0% { background: rgb(255 77 94 / .16); } }
+.tick { display: inline-block; width: 1em; font-size: .7em; margin-right: 2px; vertical-align: middle; }
+@media (prefers-reduced-motion: reduce) { .act-r.rfu, .act-r.rfd { animation: none; } }

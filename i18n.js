@@ -73,7 +73,7 @@ export const STR = {
     paper: {
       title: 'Paper trading', reset: 'Reiniciar', resetConfirm: '¿Volver a empezar con 10.000 $ de práctica? Se borran tus operaciones.',
       positions: 'Tus posiciones', markets: 'Mercados', noPos: 'Aún no tienes nada. Toca una moneda y pulsa Comprar.',
-      cashLine: '{usd} disponibles', note: 'Precios reales de Binance en directo. El dinero es de práctica.',
+      cashLine: '{usd} disponibles', note: 'Precios reales de Binance en directo. El dinero es de práctica.', spark: 'Las líneas muestran las últimas 24 horas.',
       botNote: 'Comprar y Vender usan tu cartera de paper trading, no la del bot.',
     },
     home: {
@@ -275,7 +275,7 @@ export const STR = {
     paper: {
       title: 'Paper trading', reset: 'Reset', resetConfirm: 'Start over with $10,000 of practice money? Your trades will be deleted.',
       positions: 'Your positions', markets: 'Markets', noPos: 'Nothing yet. Tap a coin and press Buy.',
-      cashLine: '{usd} available', note: 'Real Binance prices, live. The money is practice money.',
+      cashLine: '{usd} available', note: 'Real Binance prices, live. The money is practice money.', spark: 'The lines show the last 24 hours.',
       botNote: 'Buy and Sell use your paper trading wallet, not the bot’s.',
     },
     home: {

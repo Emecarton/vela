@@ -16,7 +16,7 @@ const S = {
   tab: 'home', view: null, coin: null, picking: false, livePts: {},
   set: { lang: (navigator.language || 'es').startsWith('es') ? 'es' : 'en', theme: 'terminal', size: 1, onboarded: false, ...store.get('settings', {}) },
   wallets: store.get('wallets', []),
-  manual: store.get('manual', null), desk: {}, cnd: {}, tick: {}, trade: null, cndReq: null, lbars: {}, liveAt: 0, liveBusy: false,
+  spark: {}, manual: store.get('manual', null), desk: {}, cnd: {}, tick: {}, trade: null, cndReq: null, lbars: {}, liveAt: 0, liveBusy: false,
   mk: null, loading: false, error: null,
   test: { bot: 'momentum', period: 1095 },
   setup: { bot: null, amt: 1000, start: 30 },
@@ -165,9 +165,16 @@ function onLiveTick() {
   if (now - (S.savedWatch || 0) > 30e3) { S.savedWatch = now; saveWallets(); }
   if (!uiQueued) { uiQueued = true; setTimeout(() => { uiQueued = false; paintLive(); }, 350); }
 }
+let sparkAt = 0;
+async function loadSparks() {
+  if (Date.now() - sparkAt < 10 * 60e3) return;
+  sparkAt = Date.now();
+  await Promise.all(UNIVERSE.map(async c => { try { S.spark[c] = (await candles(c, '1D')).filter((_, k, a) => k % 4 === 3 || k === a.length - 1).map(r => r.c); } catch { } }));
+  for (const el of document.querySelectorAll('[data-spark]')) el.innerHTML = sparkPath(el.dataset.spark);
+}
 function sparkPath(c) {
-  const d = S.mk?.d, s = d?.px[c]; if (!s) return '';
-  const vals = s.slice(-30).filter(x => x != null); const p = livePx(c); if (p) vals.push(p);
+  const d = S.mk?.d, s = d?.px[c]; if (!s && !S.spark[c]) return '';
+  const vals = (S.spark[c] || s.slice(-30)).filter(x => x != null).slice(); const p = livePx(c); if (p) vals.push(p);
   if (vals.length < 2) return '';
   const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
   const pts = vals.map((v, k) => `${(k / (vals.length - 1) * 100).toFixed(1)},${(4 + (1 - (v - lo) / span) * 32).toFixed(1)}`).join(' ');
@@ -187,7 +194,12 @@ function paintLive() {
   const now = Date.now();
   for (const el of document.querySelectorAll('[data-px]')) {
     const t = S.tick[el.dataset.px]; if (!t) continue;
-    const txt = price(t.p); if (el.textContent !== txt) { el.textContent = txt; flash(el, t.p >= (t.prev ?? t.p)); }
+    const txt = price(t.p);
+    if (el.textContent !== txt) {
+      const up = t.p >= (t.prev ?? t.p); el.textContent = txt; flash(el, up);
+      const row = el.closest('.act-r'); if (row) { row.classList.remove('rfu', 'rfd'); void row.offsetWidth; row.classList.add(up ? 'rfu' : 'rfd'); }
+      const ar = row?.querySelector('[data-tick]'); if (ar) { ar.textContent = up ? '▲' : '▼'; ar.className = 'tick ' + (up ? 'up-t' : 'down-t'); }
+    }
   }
   for (const el of document.querySelectorAll('[data-chg]')) { const t = S.tick[el.dataset.chg]; if (t) el.innerHTML = chg(t.chg); }
   for (const el of document.querySelectorAll('[data-wv]')) {
@@ -850,8 +862,8 @@ function tradeScreen() {
       <ul class="act mkts">${coins.map(c => { const tk = S.tick[c], p = livePx(c); return `<li><button class="act-r" data-act="coinpage" data-v="${c}|manual" data-k="mk-${c}">
         <span class="act-av">${coinAv(c)}</span><span class="act-m"><b>${COIN[c] || c}</b><span class="mono">${c}</span></span>
         <span class="spark" data-spark="${c}">${sparkPath(c)}</span>
-        <span class="act-v"><b class="mono" data-px="${c}">${p ? price(p) : '—'}</b><span data-chg="${c}">${tk ? chg(tk.chg) : ''}</span></span></button></li>`; }).join('')}</ul></section>
-    <p class="muted small">${pt.note}</p>`;
+        <span class="act-v"><b class="mono"><span data-tick class="tick" aria-hidden="true"></span><span data-px="${c}">${p ? price(p) : '—'}</span></b><span data-chg="${c}">${tk ? chg(tk.chg) : ''}</span></span></button></li>`; }).join('')}</ul></section>
+    <p class="muted small">${pt.note} ${pt.spark}</p>`;
 }
 const coinGrid = (tk, n) => { const cc = T().coin; return tk ? `<div><dt>${cc.vol}</dt><dd>$${new Intl.NumberFormat(loc(), { notation: 'compact', maximumFractionDigits: 1 }).format(tk.vol)}</dd></div><div><dt>${cc.hi}</dt><dd>${price(tk.hi)}</dd></div><div><dt>${cc.lo}</dt><dd>${price(tk.lo)}</dd></div><div><dt>${cc.botTrades}</dt><dd>${n}</dd></div>` : ''; };
 
@@ -1039,6 +1051,7 @@ function render(focusTop) {
   if (!S.picking && pick.open) pick.close();
   if (S.trade && !trd.open) trd.showModal();
   if (!S.trade && trd.open) trd.close();
+  if (S.tab === 'trade' && !S.view && !S.coin) loadSparks();
   if ((S.view || S.coin) && S.mk && S.desk.coin) {
     const key = `${S.desk.coin}|${S.desk.tf}`;
     if (S.cndReq !== key) { S.cndReq = key; loadCandles(); pollTick(); }
